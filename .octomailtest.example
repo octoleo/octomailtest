@@ -1,0 +1,8 @@
+DOMAIN=email.com
+HOST=mx1.email.host
+EMAIL=your@email.com
+PASS="secret"
+
+IMAP_PORT=993
+SMTP_PORT=587
+SIEVE_PORT=4190

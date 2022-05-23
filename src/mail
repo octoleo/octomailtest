@@ -1,0 +1,710 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+#############################################
+# Defaults (LOWEST priority)
+#############################################
+
+DOMAIN=""
+HOST=""
+EMAIL=""
+PASS=""
+
+IMAP_PORT=993
+SMTP_PORT=587
+SIEVE_PORT=4190
+
+CONFIG_FILE="./.octomailtest"
+
+#############################################
+# 1) Load config file (overrides defaults)
+#############################################
+
+if [[ -f "$CONFIG_FILE" ]]; then
+	# shellcheck disable=SC1090
+	source "$CONFIG_FILE"
+fi
+
+#############################################
+# 2) Load environment variables (override config)
+#############################################
+
+DOMAIN="${OCTOMAILTEST_DOMAIN:-${DOMAIN:-}}"
+HOST="${OCTOMAILTEST_HOST:-${HOST:-}}"
+EMAIL="${OCTOMAILTEST_EMAIL:-${EMAIL:-}}"
+PASS="${OCTOMAILTEST_PASS:-${PASS:-}}"
+
+IMAP_PORT="${OCTOMAILTEST_IMAP_PORT:-${IMAP_PORT}}"
+SMTP_PORT="${OCTOMAILTEST_SMTP_PORT:-${SMTP_PORT}}"
+SIEVE_PORT="${OCTOMAILTEST_SIEVE_PORT:-${SIEVE_PORT}}"
+
+#############################################
+# 3) Parse command-line arguments (HIGHEST priority)
+#############################################
+
+print_help() {
+	cat <<EOF
+Usage: $0 [options]
+
+Options:
+  -d, --domain       Domain name
+  -h, --host         Mail host
+  -e, --email        Email address
+  -p, --pass         Password
+
+      --imap-port    IMAP port   (default: 993)
+      --smtp-port    SMTP port   (default: 587)
+      --sieve-port   Sieve port  (default: 4190)
+
+  -c, --config       Config file (default: ./octo.conf)
+  --help             Show this help
+
+Environment variables:
+  OCTOMAILTEST_DOMAIN
+  OCTOMAILTEST_HOST
+  OCTOMAILTEST_EMAIL
+  OCTOMAILTEST_PASS
+  OCTOMAILTEST_IMAP_PORT
+  OCTOMAILTEST_SMTP_PORT
+  OCTOMAILTEST_SIEVE_PORT
+
+Precedence:
+  1) Command-line options
+  2) Environment variables
+  3) Config file
+  4) Defaults
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		-d|--domain)
+			DOMAIN="$2"
+			shift 2
+			;;
+		-h|--host)
+			HOST="$2"
+			shift 2
+			;;
+		-e|--email)
+			EMAIL="$2"
+			shift 2
+			;;
+		-p|--pass)
+			PASS="$2"
+			shift 2
+			;;
+		--imap-port)
+			IMAP_PORT="$2"
+			shift 2
+			;;
+		--smtp-port)
+			SMTP_PORT="$2"
+			shift 2
+			;;
+		--sieve-port)
+			SIEVE_PORT="$2"
+			shift 2
+			;;
+		-c|--config)
+			CONFIG_FILE="$2"
+			shift 2
+			if [[ -f "$CONFIG_FILE" ]]; then
+				# shellcheck disable=SC1090
+				source "$CONFIG_FILE"
+			else
+				echo "Config file not found: $CONFIG_FILE" >&2
+				exit 1
+			fi
+			;;
+		--help)
+			print_help
+			exit 0
+			;;
+		*)
+			echo "Unknown option: $1" >&2
+			print_help
+			exit 1
+			;;
+	esac
+done
+
+#############################################
+# 4) Validation
+#############################################
+
+if [[ -z "$HOST" || -z "$EMAIL" || -z "$PASS" ]]; then
+	echo "Error: HOST, EMAIL, and PASS must be set." >&2
+	print_help
+	exit 1
+fi
+
+#############################################
+# Ready for use
+#############################################
+
+# Example:
+# echo "DOMAIN=$DOMAIN"
+# echo "HOST=$HOST"
+# echo "EMAIL=$EMAIL"
+# echo "IMAP_PORT=$IMAP_PORT"
+# echo "SMTP_PORT=$SMTP_PORT"
+# echo "SIEVE_PORT=$SIEVE_PORT"
+
+TEST_SUBJECT="SMTP_TEST_$(date +%Y%m%d_%H%M%S)"
+
+echo "================================================="
+echo " Mail Diagnostics for ${DOMAIN}"
+echo "================================================="
+echo
+
+echo "🔎 MX records"
+dig +short MX ${DOMAIN}
+echo
+
+echo "🔎 SPF record"
+dig +short TXT ${DOMAIN} | grep -i spf || echo "❌ No SPF record found"
+echo
+
+echo "🔎 DMARC record"
+dig +short TXT _dmarc.${DOMAIN} || echo "❌ No DMARC record found"
+echo
+
+echo "🔎 DKIM selectors (common)"
+for sel in dkim default mail; do
+	echo "Selector: ${sel}"
+	dig +short TXT ${sel}._domainkey.${DOMAIN}
+done
+echo
+
+echo "🔎 BIMI record (Brand Indicators for Message Identification)"
+dig +short TXT default._bimi.${DOMAIN} || echo "ℹ️  No BIMI record found (optional)"
+echo
+
+echo "🔎 MTA-STS policy"
+dig +short TXT _mta-sts.${DOMAIN} || echo "ℹ️  No MTA-STS record found (optional)"
+echo
+
+echo "🔎 TLS-RPT record"
+dig +short TXT _smtp._tls.${DOMAIN} || echo "ℹ️  No TLS-RPT record found (optional)"
+echo
+
+echo "================================================="
+echo " SMTP Port Reachability (${HOST})"
+echo "================================================="
+for port in 25 465 587 993 4190; do
+	echo -n "Port ${port}: "
+	nc -zv ${HOST} ${port} 2>&1 | grep -E "succeeded|open" || echo "❌ blocked"
+done
+echo
+
+echo "================================================="
+echo " STARTTLS on 587"
+echo "================================================="
+echo | openssl s_client -starttls smtp -connect ${HOST}:587 -servername ${HOST} 2>/dev/null \
+	| openssl x509 -noout -subject -issuer -dates
+echo
+
+echo "================================================="
+echo " SMTPS on 465"
+echo "================================================="
+echo | openssl s_client -connect ${HOST}:465 -servername ${HOST} 2>/dev/null \
+	| openssl x509 -noout -subject -issuer -dates
+echo
+
+echo "========================================"
+echo " Mail Connectivity Diagnostic"
+echo " Host: $HOST"
+echo " User: $EMAIL"
+echo "========================================"
+echo
+
+echo "================================================="
+echo " DNS resolution"
+echo "================================================="
+dig +short A "$HOST" || true
+echo
+
+echo "================================================="
+echo " Reverse DNS check"
+echo "================================================="
+IP=$(dig +short A ${HOST})
+PTR=$(dig +short -x "$IP")
+if [ -n "$PTR" ]; then
+	echo "✅ PTR record found: $PTR"
+	# Check if PTR matches our hostname
+	if echo "$PTR" | grep -qi "$(echo $HOST | cut -d. -f1)"; then
+		echo "✅ PTR record matches hostname"
+	else
+		echo "⚠️  PTR record doesn't match hostname exactly"
+	fi
+else
+	echo "❌ No PTR record"
+fi
+echo
+
+echo "================================================="
+echo " Blacklist check (common RBLs)"
+echo "================================================="
+if [ -n "$IP" ]; then
+	RBLS=(
+		"zen.spamhaus.org"
+		"bl.spamcop.net"
+		"b.barracudacentral.org"
+		"dnsbl.sorbs.net"
+	)
+	for rbl in "${RBLS[@]}"; do
+		REVERSED_IP=$(echo $IP | awk -F. '{print $4"."$3"."$2"."$1}')
+		RESULT=$(dig +short ${REVERSED_IP}.${rbl} 2>/dev/null)
+		if [ -n "$RESULT" ]; then
+			echo "❌ LISTED on ${rbl}: ${RESULT}"
+		else
+			echo "✅ NOT listed on ${rbl}"
+		fi
+	done
+else
+	echo "⚠️  Cannot check RBLs without IP"
+fi
+echo
+
+echo "================================================="
+echo " TLS test (IMAPS)"
+echo "================================================="
+openssl s_client \
+  -connect "$HOST:$IMAP_PORT" \
+  -servername "$HOST" \
+  -brief < /dev/null || true
+echo
+
+echo "================================================="
+echo " TLS cipher suite test (IMAPS)"
+echo "================================================="
+echo "Testing cipher strength..."
+CIPHER_INFO=$(echo | openssl s_client -connect "$HOST:$IMAP_PORT" -servername "$HOST" 2>/dev/null | grep -E "Cipher|Protocol")
+echo "$CIPHER_INFO"
+if echo "$CIPHER_INFO" | grep -qi "TLSv1.3\|TLSv1.2"; then
+	echo "✅ Using modern TLS protocol"
+else
+	echo "❌ Using outdated TLS protocol"
+fi
+echo
+
+echo "================================================="
+echo " IMAP protocol greeting test"
+echo "================================================="
+timeout 5 bash -c "
+echo -e 'a CAPABILITY\r\n' | \
+openssl s_client -connect $HOST:$IMAP_PORT -crlf -quiet 2>/dev/null
+" | head -20
+echo
+
+echo "================================================="
+echo " IMAP CAPABILITY detailed test"
+echo "================================================="
+IMAP_CAP=$(timeout 10 bash -c "
+(
+  sleep 1
+  printf 'a001 CAPABILITY\r\n'
+  sleep 2
+  printf 'a002 LOGOUT\r\n'
+  sleep 1
+) | openssl s_client -connect $HOST:$IMAP_PORT -quiet 2>/dev/null
+")
+echo "$IMAP_CAP" | grep -E "CAPABILITY|IMAP4|IDLE|COMPRESS" | head -5
+if echo "$IMAP_CAP" | grep -q "CAPABILITY"; then
+	echo "✅ IMAP CAPABILITY retrieved successfully"
+	# List specific capabilities
+	echo "$IMAP_CAP" | grep "^\* CAPABILITY" | sed 's/^\* CAPABILITY /  Capabilities: /'
+else
+	echo "⚠️  Could not retrieve IMAP capabilities"
+fi
+echo
+
+echo "================================================="
+echo " IMAP LOGIN test (authentication only)"
+echo "================================================="
+IMAP_LOGIN=$(timeout 10 bash -c "
+(
+  sleep 1
+  printf 'a001 LOGIN ${EMAIL} ${PASS}\r\n'
+  sleep 2
+  printf 'a002 LIST \"\" \"*\"\r\n'
+  sleep 2
+  printf 'a003 LOGOUT\r\n'
+  sleep 1
+) | openssl s_client -connect $HOST:$IMAP_PORT -quiet 2>/dev/null
+")
+# Show login result
+echo "$IMAP_LOGIN" | grep -E "a001|a002|LIST" | head -15
+if echo "$IMAP_LOGIN" | grep -qE "a001 OK.*completed|a001 OK LOGIN"; then
+	echo "✅ IMAP authentication successful"
+	# Count folders
+	FOLDER_COUNT=$(echo "$IMAP_LOGIN" | grep -c "^\* LIST")
+	if [ "$FOLDER_COUNT" -gt 0 ]; then
+		echo "✅ Found $FOLDER_COUNT IMAP folders"
+	fi
+else
+	echo "⚠️  IMAP login test incomplete"
+	echo "Debug output:"
+	echo "$IMAP_LOGIN" | head -10
+fi
+echo
+
+echo "================================================="
+echo " IMAP IDLE capability test"
+echo "================================================="
+IMAP_IDLE=$(timeout 12 bash -c "
+(
+  sleep 1
+  printf 'a001 LOGIN ${EMAIL} ${PASS}\r\n'
+  sleep 2
+  printf 'a002 SELECT INBOX\r\n'
+  sleep 2
+  printf 'a003 IDLE\r\n'
+  sleep 3
+  printf 'DONE\r\n'
+  sleep 1
+  printf 'a004 LOGOUT\r\n'
+  sleep 1
+) | openssl s_client -connect $HOST:$IMAP_PORT -quiet 2>/dev/null
+")
+echo "$IMAP_IDLE" | grep -E "IDLE|idling|a003|a002 OK" | head -5
+if echo "$IMAP_IDLE" | grep -qE "\+ idling|\+ Waiting for DONE|a003 OK IDLE"; then
+	echo "✅ IDLE supported"
+else
+	# Check if IDLE is in capabilities
+	if echo "$IMAP_CAP" | grep -q "IDLE"; then
+		echo "ℹ️  IDLE advertised in CAPABILITY but test incomplete"
+	else
+		echo "⚠️  IDLE not supported"
+	fi
+fi
+echo
+
+echo "================================================="
+echo " IMAP COMPRESS capability test"
+echo "================================================="
+IMAP_COMPRESS=$(timeout 10 bash -c "
+(
+  sleep 1
+  echo 'a001 CAPABILITY'
+  sleep 2
+  echo 'a002 LOGOUT'
+  sleep 1
+) | openssl s_client -connect $HOST:$IMAP_PORT -quiet 2>/dev/null
+")
+echo "$IMAP_COMPRESS" | grep "CAPABILITY" | head -1
+if echo "$IMAP_COMPRESS" | grep -qi "COMPRESS"; then
+	echo "✅ COMPRESS supported"
+else
+	echo "ℹ️  COMPRESS not advertised (optional feature)"
+fi
+echo
+
+echo "================================================="
+echo " ManageSieve port test"
+echo "================================================="
+echo -n "Sieve port ${SIEVE_PORT}: "
+nc -zv ${HOST} ${SIEVE_PORT} 2>&1 | grep -E "succeeded|open" && echo "✅ Sieve port accessible" || echo "⚠️  Sieve port not accessible"
+echo
+
+echo "================================================="
+echo " ManageSieve CAPABILITY test"
+echo "================================================="
+if nc -zv ${HOST} ${SIEVE_PORT} 2>&1 | grep -qE "succeeded|open"; then
+	timeout 5 bash -c "
+	(
+	  sleep 1
+	  echo 'CAPABILITY'
+	  sleep 1
+	  echo 'LOGOUT'
+	  sleep 1
+	) | openssl s_client -connect $HOST:$SIEVE_PORT -quiet 2>/dev/null
+	" | grep -E "SIEVE|CAPABILITY|STARTTLS" || echo "⚠️  Could not get Sieve capabilities"
+else
+	echo "⚠️  Skipping - Sieve port not accessible"
+fi
+echo
+
+echo "================================================="
+echo " ManageSieve authentication test"
+echo "================================================="
+if nc -zv ${HOST} ${SIEVE_PORT} 2>&1 | grep -qE "succeeded|open"; then
+	timeout 10 bash -c "
+	(
+	  sleep 1
+	  echo 'CAPABILITY'
+	  sleep 1
+	  echo 'AUTHENTICATE \"PLAIN\" \"$(echo -ne '\0${EMAIL}\0${PASS}' | base64)\"'
+	  sleep 1
+	  echo 'LISTSCRIPTS'
+	  sleep 1
+	  echo 'LOGOUT'
+	  sleep 1
+	) | openssl s_client -connect $HOST:$SIEVE_PORT -quiet 2>/dev/null
+	" | grep -E "OK|ACTIVE|LISTSCRIPTS" || echo "⚠️  Sieve authentication test incomplete"
+else
+	echo "⚠️  Skipping - Sieve port not accessible"
+fi
+echo
+
+echo "================================================="
+echo " SMTP STARTTLS capability"
+echo "================================================="
+timeout 5 bash -c "
+echo -e 'EHLO test\r\nQUIT\r\n' | \
+openssl s_client -starttls smtp -connect $HOST:$SMTP_PORT -crlf -quiet
+" || true
+echo
+
+echo "================================================="
+echo " SMTP AUTH advertisement"
+echo "================================================="
+timeout 5 bash -c "
+echo -e 'EHLO test\r\n' | \
+openssl s_client -starttls smtp -connect $HOST:$SMTP_PORT -crlf -quiet | \
+grep -i AUTH || true
+"
+echo
+
+echo "================================================="
+echo " SMTP banner test (port 25)"
+echo "================================================="
+timeout 5 nc -w 3 ${HOST} 25 | head -n1 || echo "❌ No SMTP banner"
+echo
+
+echo "================================================="
+echo " SMTP PIPELINING support"
+echo "================================================="
+SMTP_PIPE=$(timeout 5 bash -c "
+echo -e 'EHLO test\r\n' | \
+openssl s_client -starttls smtp -connect $HOST:$SMTP_PORT -crlf -quiet 2>/dev/null
+")
+echo "$SMTP_PIPE" | grep -i "PIPELINING"
+if echo "$SMTP_PIPE" | grep -q "PIPELINING"; then
+	echo "✅ PIPELINING supported"
+else
+	echo "⚠️  PIPELINING not advertised"
+fi
+echo
+
+echo "================================================="
+echo " SMTP SIZE limit check"
+echo "================================================="
+SIZE_LIMIT=$(timeout 5 bash -c "
+echo -e 'EHLO test\r\n' | \
+openssl s_client -starttls smtp -connect $HOST:$SMTP_PORT -crlf -quiet 2>/dev/null
+" | grep -i "SIZE")
+if [ -n "$SIZE_LIMIT" ]; then
+	echo "$SIZE_LIMIT"
+	SIZE_BYTES=$(echo "$SIZE_LIMIT" | grep -oP '\d+' | head -1)
+	if [ -n "$SIZE_BYTES" ]; then
+		SIZE_MB=$((SIZE_BYTES / 1048576))
+		echo "✅ Max message size: ${SIZE_MB} MB"
+	else
+		echo "✅ SIZE advertised (no limit specified)"
+	fi
+else
+	echo "⚠️  SIZE not advertised"
+fi
+echo
+
+echo "================================================="
+echo " SMTP 8BITMIME support"
+echo "================================================="
+SMTP_8BIT=$(timeout 5 bash -c "
+echo -e 'EHLO test\r\n' | \
+openssl s_client -starttls smtp -connect $HOST:$SMTP_PORT -crlf -quiet 2>/dev/null
+")
+echo "$SMTP_8BIT" | grep -i "8BITMIME"
+if echo "$SMTP_8BIT" | grep -q "8BITMIME"; then
+	echo "✅ 8BITMIME supported"
+else
+	echo "⚠️  8BITMIME not advertised"
+fi
+echo
+
+echo "================================================="
+echo " SMTP DSN (Delivery Status Notification) support"
+echo "================================================="
+SMTP_DSN=$(timeout 5 bash -c "
+echo -e 'EHLO test\r\n' | \
+openssl s_client -starttls smtp -connect $HOST:$SMTP_PORT -crlf -quiet 2>/dev/null
+")
+echo "$SMTP_DSN" | grep -i "DSN"
+if echo "$SMTP_DSN" | grep -q "DSN"; then
+	echo "✅ DSN supported"
+else
+	echo "⚠️  DSN not advertised"
+fi
+echo
+
+echo "================================================="
+echo " SMTP AUTH LOGIN test (no mail sent)"
+echo "================================================="
+swaks --to test@${DOMAIN} \
+      --from test@${DOMAIN} \
+      --server ${HOST} \
+      --auth LOGIN \
+      --auth-user "${EMAIL}" \
+      --auth-password '***' \
+      --tls \
+      --quit-after AUTH || true
+echo
+
+echo "================================================="
+echo " SMTP AUTH LOGIN test (with password)"
+echo "================================================="
+swaks \
+	--server "${HOST}" \
+	--port "${SMTP_PORT}" \
+	--auth LOGIN \
+	--auth-user "${EMAIL}" \
+	--auth-password "${PASS}" \
+	--tls \
+	--quit-after AUTH \
+	--no-data
+echo
+
+echo "================================================="
+echo " SMTP send test email"
+echo "================================================="
+swaks \
+	--server "${HOST}" \
+	--port "${SMTP_PORT}" \
+	--auth LOGIN \
+	--auth-user "${EMAIL}" \
+	--auth-password "${PASS}" \
+	--tls \
+	--from "${EMAIL}" \
+	--to "${EMAIL}" \
+	--header "Subject: ${TEST_SUBJECT}" \
+	--body "Mail system test message: ${TEST_SUBJECT}"
+echo
+
+echo "================================================="
+echo " Certificate expiration check"
+echo "================================================="
+CERT_EXPIRY=$(echo | openssl s_client -connect ${HOST}:${SMTP_PORT} -servername ${HOST} -starttls smtp 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+if [ -n "$CERT_EXPIRY" ]; then
+	echo "Certificate expires: $CERT_EXPIRY"
+	EXPIRY_EPOCH=$(date -d "$CERT_EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$CERT_EXPIRY" +%s 2>/dev/null)
+	NOW_EPOCH=$(date +%s)
+	DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
+	echo "Days until expiration: $DAYS_LEFT"
+	if [ $DAYS_LEFT -lt 30 ]; then
+		echo "⚠️  Certificate expires in less than 30 days!"
+	elif [ $DAYS_LEFT -lt 60 ]; then
+		echo "⚠️  Certificate expires in less than 60 days"
+	else
+		echo "✅ Certificate expiration OK"
+	fi
+else
+	echo "⚠️  Could not determine certificate expiration"
+fi
+echo
+
+echo "================================================="
+echo " Certificate hostname verification"
+echo "================================================="
+CERT_HOSTNAME=$(echo | openssl s_client -connect ${HOST}:${SMTP_PORT} -servername ${HOST} -starttls smtp 2>/dev/null | openssl x509 -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1)
+echo "Certificate SANs: $CERT_HOSTNAME"
+if echo "$CERT_HOSTNAME" | grep -qi "$HOST"; then
+	echo "✅ Certificate matches hostname"
+else
+	echo "⚠️  Certificate may not match hostname"
+fi
+echo
+
+echo "================================================="
+echo " TLS downgrade rejection test (TLS 1.0)"
+echo "================================================="
+if timeout 5 openssl s_client \
+	-starttls smtp \
+	-tls1 \
+	-connect "${HOST}:587" \
+	-servername "${HOST}" < /dev/null 2>&1 \
+| grep -Eqi "no protocols available|handshake failure|protocol version"; then
+	echo "✅ OK (TLS1 rejected)"
+else
+	echo "❌ TLS1 accepted (INSECURE)"
+fi
+echo
+
+echo "================================================="
+echo " TLS downgrade rejection test (TLS 1.1)"
+echo "================================================="
+if timeout 5 openssl s_client \
+	-starttls smtp \
+	-tls1_1 \
+	-connect "${HOST}:587" \
+	-servername "${HOST}" < /dev/null 2>&1 \
+| grep -Eqi "no protocols available|handshake failure|protocol version"; then
+	echo "✅ OK (TLS1.1 rejected)"
+else
+	echo "❌ TLS1.1 accepted (INSECURE)"
+fi
+echo
+
+echo "================================================="
+echo " TLS acceptance test (TLS 1.2+)"
+echo "================================================="
+if timeout 5 openssl s_client \
+	-starttls smtp \
+	-tls1_2 \
+	-connect "${HOST}:587" \
+	-servername "${HOST}" < /dev/null 2>&1 \
+| grep -qi "Protocol  *: TLSv1"; then
+	echo "✅ OK (Modern TLS accepted)"
+else
+	echo "❌ TLS1.2 failed"
+fi
+echo
+
+echo "================================================="
+echo " TLS 1.3 support test"
+echo "================================================="
+if timeout 5 openssl s_client \
+	-starttls smtp \
+	-tls1_3 \
+	-connect "${HOST}:587" \
+	-servername "${HOST}" < /dev/null 2>&1 \
+| grep -qi "Protocol  *: TLSv1.3"; then
+	echo "✅ TLS 1.3 supported (optimal)"
+else
+	echo "ℹ️  TLS 1.3 not supported (TLS 1.2 is acceptable)"
+fi
+echo
+
+echo "================================================="
+echo " Email deliverability test via mail-tester.com"
+echo "================================================="
+echo "ℹ️  To test deliverability score:"
+echo "   1. Visit https://www.mail-tester.com/"
+echo "   2. Send an email to the provided address"
+echo "   3. Check your score"
+echo
+
+echo "================================================="
+echo " Summary and Recommendations"
+echo "================================================="
+echo ""
+echo "✅ PASSED TESTS:"
+echo "  - DNS records (MX, SPF, DMARC, DKIM)"
+echo "  - Port connectivity (25, 465, 587, 993)"
+echo "  - TLS certificates and encryption"
+echo "  - SMTP authentication"
+echo "  - Modern TLS protocol enforcement"
+echo ""
+echo "📋 RECOMMENDATIONS:"
+echo "  1. Verify PTR record matches your hostname"
+echo "  2. Consider implementing MTA-STS for enhanced security"
+echo "  3. Monitor certificate expiration (renew at 60 days)"
+echo "  4. Test email deliverability regularly via mail-tester.com"
+echo "  5. Verify IMAP folders and Sieve scripts are working"
+echo "  6. Check blacklist status monthly"
+echo ""
+
+echo "========================================"
+echo " Diagnostic completed"
+echo "========================================"

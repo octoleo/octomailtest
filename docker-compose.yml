@@ -1,0 +1,13 @@
+services:
+	octomailtest:
+		image: octomailtest
+		command: both
+		environment:
+			OCTOMAILTEST_DOMAIN: email.com
+			OCTOMAILTEST_HOST: mx1.email.host
+			OCTOMAILTEST_EMAIL: your@email.com
+			OCTOMAILTEST_PASS: secret
+			OCTOMAILTEST_LOG: /logs/mail.log
+		volumes:
+			- ./logs:/logs
+

@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+#############################################
+# Defaults
+#############################################
+
+HOST=""
+EMAIL=""
+PASS=""
+IMAP_PORT=993
+INTERACTIVE=0
+
+CONFIG_FILE="./.octomailtest"
+
+#############################################
+# 1) Load config file (LOWEST priority)
+#############################################
+
+if [[ -f "$CONFIG_FILE" ]]; then
+	# shellcheck disable=SC1090
+	source "$CONFIG_FILE"
+fi
+
+#############################################
+# 2) Load environment variables
+#############################################
+
+HOST="${OCTOMAILTEST_HOST:-${HOST:-}}"
+EMAIL="${OCTOMAILTEST_EMAIL:-${EMAIL:-}}"
+PASS="${OCTOMAILTEST_PASS:-${PASS:-}}"
+IMAP_PORT="${OCTOMAILTEST_IMAP_PORT:-${IMAP_PORT}}"
+
+#############################################
+# 3) Parse command-line arguments
+#############################################
+
+print_help() {
+	cat <<EOF
+Usage: $0 [options]
+
+Options:
+  -h, --host         Hostname
+  -e, --email        Email address
+  -p, --pass         Password
+  --imap-port        IMAP port
+  -c, --config       Config file (default: ./.octomailtest)
+  --interactive      Enable interactive TLS test
+  --help             Show this help
+
+Environment variables:
+  OCTOMAILTEST_HOST
+  OCTOMAILTEST_EMAIL
+  OCTOMAILTEST_PASS
+  OCTOMAILTEST_IMAP_PORT
+
+Precedence:
+  1) Command-line options
+  2) Environment variables
+  3) Config file
+  4) Defaults
+
+Notes:
+  Interactive mode is automatically disabled in Docker, CI, and non-TTY runs.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		-h|--host) HOST="$2"; shift 2 ;;
+		-e|--email) EMAIL="$2"; shift 2 ;;
+		-p|--pass) PASS="$2"; shift 2 ;;
+		--imap-port) IMAP_PORT="$2"; shift 2 ;;
+		--interactive) INTERACTIVE=1; shift ;;
+		-c|--config)
+			CONFIG_FILE="$2"
+			shift 2
+			[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE" || {
+				echo "Config file not found: $CONFIG_FILE" >&2
+				exit 1
+			}
+			;;
+		--help)
+			print_help
+			exit 0
+			;;
+		*)
+			echo "Unknown option: $1" >&2
+			print_help
+			exit 1
+			;;
+	esac
+done
+
+#############################################
+# 4) Validation
+#############################################
+
+if [[ -z "$HOST" || -z "$EMAIL" || -z "$PASS" || -z "$IMAP_PORT" ]]; then
+	echo "Error: HOST, EMAIL, PASS, IMAP_PORT must be set." >&2
+	exit 1
+fi
+
+#############################################
+# 5) Execution mode detection
+#############################################
+
+# Disable interactive mode automatically when unsafe
+if [[ ! -t 0 || ! -t 1 || "${OCTOMAILTEST_CI:-}" == "1" ]]; then
+	INTERACTIVE=0
+fi
+
+#############################################
+# Diagnostics
+#############################################
+
+echo "================================================="
+echo " Detailed IMAP Protocol Test"
+echo " Host: $HOST:$IMAP_PORT"
+echo "================================================="
+echo
+
+echo "Test 1: IMAP Greeting and CAPABILITY"
+echo "================================================="
+(
+	sleep 2
+	printf "a001 CAPABILITY\r\n"
+	sleep 3
+	printf "a002 LOGOUT\r\n"
+	sleep 2
+) | timeout 15 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
+	| grep -v "^depth=" | grep -v "^verify" | head -20 || true
+
+echo
+echo "================================================="
+echo "Test 2: IMAP Authentication"
+echo "================================================="
+(
+	sleep 2
+	printf "a001 LOGIN %s %s\r\n" "$EMAIL" "$PASS"
+	sleep 3
+	printf "a002 LOGOUT\r\n"
+	sleep 2
+) | timeout 15 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
+	| grep -v "^depth=" | grep -v "^verify" | head -20 || true
+
+echo
+echo "================================================="
+echo "Test 3: IMAP List Folders"
+echo "================================================="
+(
+	sleep 2
+	printf "a001 LOGIN %s %s\r\n" "$EMAIL" "$PASS"
+	sleep 3
+	printf "a002 LIST \"\" \"*\"\r\n"
+	sleep 4
+	printf "a003 LOGOUT\r\n"
+	sleep 2
+) | timeout 20 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
+	| grep -v "^depth=" | grep -v "^verify" || true
+
+echo
+echo "================================================="
+echo "Test 4: IMAP SELECT and IDLE"
+echo "================================================="
+(
+	sleep 2
+	printf "a001 LOGIN %s %s\r\n" "$EMAIL" "$PASS"
+	sleep 3
+	printf "a002 SELECT INBOX\r\n"
+	sleep 3
+	printf "a003 IDLE\r\n"
+	sleep 4
+	printf "DONE\r\n"
+	sleep 2
+	printf "a004 LOGOUT\r\n"
+	sleep 2
+) | timeout 25 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
+	| grep -v "^depth=" | grep -v "^verify" | head -30 || true
+
+#############################################
+# Optional interactive test
+#############################################
+
+if [[ "$INTERACTIVE" -eq 1 ]]; then
+	echo
+	echo "================================================="
+	echo "Interactive TLS session"
+	echo "================================================="
+	echo "Type: a001 CAPABILITY"
+	echo "Then: a002 LOGOUT"
+	echo
+	timeout 30 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet || true
+else
+	echo
+	echo "ℹ️  Interactive TLS test skipped (non-interactive mode)"
+fi
+
+echo
+echo "================================================="
+echo " Test completed"
+echo "================================================="
+
