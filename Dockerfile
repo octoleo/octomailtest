@@ -1,20 +1,24 @@
 FROM alpine:3.20
 
-# Install required tools
+# Install base tools from stable repos
 RUN apk add --no-cache \
 	bash \
 	openssl \
 	ca-certificates \
 	bind-tools \
 	netcat-openbsd \
-	swaks \
 	coreutils \
 	jq
+
+# Install swaks from edge/testing
+RUN apk add --no-cache \
+	--repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing \
+	swaks
 
 # Create non-root user and group
 RUN addgroup -S octomailtest && adduser -S octomailtest -G octomailtest
 
-# App directory (namespaced)
+# App directory
 WORKDIR /app/octomailtest
 
 # Copy scripts
