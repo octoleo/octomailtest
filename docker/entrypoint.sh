@@ -86,11 +86,11 @@ run() {
 if [[ "$FORMAT" == "json" ]]; then
 	OUTPUT=$(
 		case "$ACTION" in
-			mail) run "/app/mail" ;;
-			imap) run "/app/imap" ;;
+			mail) run "./mail" ;;
+			imap) run "./imap" ;;
 			both)
-				run "/app/mail"
-				run "/app/imap"
+				run "./mail"
+				run "./imap"
 				;;
 		esac
 	)
@@ -100,15 +100,15 @@ if [[ "$FORMAT" == "json" ]]; then
 else
 	case "$ACTION" in
 		mail)
-			run "/app/mail"
+			run "./mail"
 			;;
 		imap)
-			run "/app/imap"
+			run "./imap"
 			;;
 		both)
-			run "/app/mail"
+			run "./mail"
 			echo "----------------------------------------"
-			run "/app/imap"
+			run "./imap"
 			;;
 	esac
 fi
