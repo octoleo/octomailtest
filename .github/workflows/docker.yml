@@ -6,37 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build test image
-        run: |
-          docker build -t octomailtest:test .
-
-      - name: Verify entrypoint
-        run: |
-          docker run --rm octomailtest:test --help
-
-      - name: Run mail diagnostics (CI mode)
-        env:
-          OCTOMAILTEST_DOMAIN: ${{ secrets.OCTOMAILTEST_DOMAIN }}
-          OCTOMAILTEST_HOST: ${{ secrets.OCTOMAILTEST_HOST }}
-          OCTOMAILTEST_EMAIL: ${{ secrets.OCTOMAILTEST_EMAIL }}
-          OCTOMAILTEST_PASS: ${{ secrets.OCTOMAILTEST_PASS }}
-        run: |
-          docker run --rm \
-            -e OCTOMAILTEST_DOMAIN \
-            -e OCTOMAILTEST_HOST \
-            -e OCTOMAILTEST_EMAIL \
-            -e OCTOMAILTEST_PASS \
-            octomailtest:test mail --ci
-
   docker:
-    needs: test
     runs-on: ubuntu-latest
 
     steps:
