@@ -1,0 +1,48 @@
+name: Test Docker Image
+
+on:
+  pull_request:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build test image
+        run: |
+          docker build -t octomailtest:test .
+
+      - name: Verify entrypoint
+        run: |
+          docker run --rm octomailtest:test --help >/dev/null
+
+      - name: Run mail diagnostics (CI mode, silent)
+        env:
+          OCTOMAILTEST_DOMAIN: ${{ secrets.OCTOMAILTEST_DOMAIN }}
+          OCTOMAILTEST_HOST: ${{ secrets.OCTOMAILTEST_HOST }}
+          OCTOMAILTEST_EMAIL: ${{ secrets.OCTOMAILTEST_EMAIL }}
+          OCTOMAILTEST_PASS: ${{ secrets.OCTOMAILTEST_PASS }}
+        run: |
+          set +e
+          docker run --rm \
+            -e OCTOMAILTEST_DOMAIN \
+            -e OCTOMAILTEST_HOST \
+            -e OCTOMAILTEST_EMAIL \
+            -e OCTOMAILTEST_PASS \
+            octomailtest:test mail --ci \
+            >/dev/null 2>&1
+          RESULT=$?
+          set -e
+
+          if [ "$RESULT" -eq 0 ]; then
+            echo "✅ Mail diagnostics: PASS"
+          else
+            echo "❌ Mail diagnostics: FAIL"
+            exit 1
+          fi
