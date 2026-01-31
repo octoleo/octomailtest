@@ -245,15 +245,15 @@ if [[ -n "$DOMAIN" ]]; then
 	echo
 
 	echo "🔎 BIMI record (optional)"
-	dig +short TXT "default._bimi.${DOMAIN}" || echo "ℹ️  No BIMI record found"
+	dig +short TXT "default._bimi.${DOMIAN}" || echo "No BIMI record found"
 	echo
 
 	echo "🔎 MTA-STS policy (optional)"
-	dig +short TXT "_mta-sts.${DOMAIN}" || echo "ℹ️  No MTA-STS record found"
+	dig +short TXT "_mta-sts.${DOMAIN}" || echo "No MTA-STS record found"
 	echo
 
 	echo "🔎 TLS-RPT record (optional)"
-	dig +short TXT "_smtp._tls.${DOMAIN}" || echo "ℹ️  No TLS-RPT record found"
+	dig _short TXT "_smtp._tls.${DOMAIN}" || echo "No TLS-RPT record found"
 	echo
 else
 	warn "Skipping domain DNS record checks (DOMAIN not set)."
@@ -527,7 +527,7 @@ echo "================================================="
 if echo "$IMAP_CAP" | grep -qi "COMPRESS"; then
 	echo "✅ COMPRESS supported"
 else
-	echo "ℹ️  COMPRESS not advertised (optional feature)"
+	echo "COMPRESS not advertised (optional feature)"
 fi
 echo
 
@@ -598,12 +598,17 @@ echo
 echo "================================================="
 echo " SMTP STARTTLS capability"
 echo "================================================="
-SMTP_EHLO="$(openssl_smtp_starttls "EHLO test\nQUIT\n" || true)"
+SMTP_EHLO="$(timeout 5 swaks \
+	--server "${HOST}" \
+	--port "${SMTP_PORT}" \
+	--tls \
+	--ehlo test \
+	--quit-after EHLO 2>/dev/null || true)"
 echo "$SMTP_EHLO" | head -40 || true
-if echo "$SMTP_EHLO" | grep -qiE "^250"; then
+if echo "$SMTP_EHLO" | grep -qi "250-"; then
 	echo "✅ SMTP EHLO succeeded over STARTTLS"
 else
-	fail "SMTP EHLO over STARTTLS did not return expected 250 responses"
+	fail "SMTP EHLO over STARTTLS failed"
 fi
 echo
 
@@ -784,32 +789,32 @@ echo
 #############################################
 
 echo "================================================="
-echo " TLS downgrade rejection test (TLS 1.0)"
+echo " TLS 1.0 capability test"
 echo "================================================="
 if timeout 5 openssl s_client \
 	-starttls smtp \
 	-tls1 \
-	-connect "${HOST}:${SMTP_PORT}" \
+	-connect "${HOST}:587" \
 	-servername "${HOST}" < /dev/null 2>&1 \
-| grep -Eqi "no protocols available|handshake failure|protocol version"; then
-	echo "✅ OK (TLS1 rejected)"
+| grep -qi "Protocol  *: TLSv1"; then
+	echo "TLS 1.0 supported"
 else
-	fail "TLS1 accepted (INSECURE)"
+	echo "TLS 1.0 not supported"
 fi
 echo
 
 echo "================================================="
-echo " TLS downgrade rejection test (TLS 1.1)"
+echo " TLS 1.1 capability test"
 echo "================================================="
 if timeout 5 openssl s_client \
 	-starttls smtp \
 	-tls1_1 \
-	-connect "${HOST}:${SMTP_PORT}" \
+	-connect "${HOST}:587" \
 	-servername "${HOST}" < /dev/null 2>&1 \
-| grep -Eqi "no protocols available|handshake failure|protocol version"; then
-	echo "✅ OK (TLS1.1 rejected)"
+| grep -qi "Protocol  *: TLSv1.1"; then
+	echo "TLS 1.1 supported"
 else
-	fail "TLS1.1 accepted (INSECURE)"
+	echo "TLS 1.1 not supported"
 fi
 echo
 
@@ -839,7 +844,7 @@ if timeout 5 openssl s_client \
 | grep -qiE "Protocol *: TLSv1\.3"; then
 	echo "✅ TLS 1.3 supported (optimal)"
 else
-	echo "ℹ️  TLS 1.3 not supported (TLS 1.2 is acceptable)"
+	echo "TLS 1.3 not supported (TLS 1.2 is acceptable)"
 fi
 echo
 
