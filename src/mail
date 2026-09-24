@@ -245,7 +245,7 @@ if [[ -n "$DOMAIN" ]]; then
 	echo
 
 	echo "🔎 BIMI record (optional)"
-	dig +short TXT "default._bimi.${DOMIAN}" || echo "No BIMI record found"
+	dig +short TXT "default._bimi.${DOMAIN}" || echo "No BIMI record found"
 	echo
 
 	echo "🔎 MTA-STS policy (optional)"
@@ -253,7 +253,7 @@ if [[ -n "$DOMAIN" ]]; then
 	echo
 
 	echo "🔎 TLS-RPT record (optional)"
-	dig _short TXT "_smtp._tls.${DOMAIN}" || echo "No TLS-RPT record found"
+	dig +short TXT "_smtp._tls.${DOMAIN}" || echo "No TLS-RPT record found"
 	echo
 else
 	warn "Skipping domain DNS record checks (DOMAIN not set)."
