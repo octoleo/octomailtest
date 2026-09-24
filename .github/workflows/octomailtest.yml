@@ -1,0 +1,239 @@
+# OctoMailTest report workflow
+#
+# Three ways to use it:
+#
+#  1. Manually: Actions -> "OctoMailTest" -> "Run workflow". The mailbox comes
+#     from the OCTOMAILTEST_* repository secrets unless overridden in the form.
+#
+#  2. From another repository, as a reusable workflow:
+#
+#       jobs:
+#         mail:
+#           uses: octoleo/octomailtest/.github/workflows/octomailtest.yml@master
+#           with:
+#             domain: example.com
+#             host: mx1.example.com
+#             email: postmaster@example.com
+#           secrets:
+#             OCTOMAILTEST_PASS: ${{ secrets.MAIL_TEST_PASS }}
+#
+#  3. Automatically on pull requests and pushes to master in this repository,
+#     to prove the action still works (skipped when the secrets are absent,
+#     for example on pull requests from forks).
+#
+# The report (report.txt, report.json, summary.md) is uploaded as a workflow
+# artifact and shown on the job summary page.
+
+name: OctoMailTest
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Diagnostics to run'
+        type: choice
+        options: [both, mail, imap]
+        default: both
+      domain:
+        description: 'Mail domain for the DNS checks (default: OCTOMAILTEST_DOMAIN secret)'
+        type: string
+        default: ''
+      host:
+        description: 'Mail server host (default: OCTOMAILTEST_HOST secret)'
+        type: string
+        default: ''
+      email:
+        description: 'Mailbox address (default: OCTOMAILTEST_EMAIL secret)'
+        type: string
+        default: ''
+      imap-port:
+        description: 'IMAP port (0 = 993)'
+        type: number
+        default: 0
+      smtp-port:
+        description: 'SMTP port (0 = 587)'
+        type: number
+        default: 0
+      sieve-port:
+        description: 'ManageSieve port (0 = 4190)'
+        type: number
+        default: 0
+      quiet:
+        description: 'Strip the ===== separator lines (like --ci)'
+        type: boolean
+        default: false
+      fail-on-error:
+        description: 'Fail the job when critical failures are found'
+        type: boolean
+        default: true
+      timeout:
+        description: 'Seconds each diagnostic script may run'
+        type: number
+        default: 900
+      artifact-name:
+        description: 'Name of the report artifact'
+        type: string
+        default: octomailtest-report
+      retention-days:
+        description: 'Days to keep the artifact (0 = repository default)'
+        type: number
+        default: 0
+      runs-on:
+        description: 'Runner label'
+        type: string
+        default: ubuntu-latest
+
+  workflow_call:
+    inputs:
+      mode:
+        description: 'Diagnostics to run: both, mail or imap'
+        type: string
+        default: both
+      domain:
+        description: 'Mail domain for the DNS checks (falls back to the OCTOMAILTEST_DOMAIN secret)'
+        type: string
+        default: ''
+      host:
+        description: 'Mail server host (falls back to the OCTOMAILTEST_HOST secret)'
+        type: string
+        default: ''
+      email:
+        description: 'Mailbox address (falls back to the OCTOMAILTEST_EMAIL secret)'
+        type: string
+        default: ''
+      imap-port:
+        description: 'IMAP port (0 = 993)'
+        type: number
+        default: 0
+      smtp-port:
+        description: 'SMTP port (0 = 587)'
+        type: number
+        default: 0
+      sieve-port:
+        description: 'ManageSieve port (0 = 4190)'
+        type: number
+        default: 0
+      quiet:
+        description: 'Strip the ===== separator lines (like --ci)'
+        type: boolean
+        default: false
+      fail-on-error:
+        description: 'Fail the job when critical failures are found'
+        type: boolean
+        default: true
+      timeout:
+        description: 'Seconds each diagnostic script may run'
+        type: number
+        default: 900
+      artifact-name:
+        description: 'Name of the report artifact (must be unique within the calling workflow run)'
+        type: string
+        default: octomailtest-report
+      retention-days:
+        description: 'Days to keep the artifact (0 = repository default)'
+        type: number
+        default: 0
+      runs-on:
+        description: 'Runner label'
+        type: string
+        default: ubuntu-latest
+    secrets:
+      OCTOMAILTEST_DOMAIN:
+        description: 'Mail domain, when it should not be passed as a plain input'
+        required: false
+      OCTOMAILTEST_HOST:
+        description: 'Mail server host, when it should not be passed as a plain input'
+        required: false
+      OCTOMAILTEST_EMAIL:
+        description: 'Mailbox address, when it should not be passed as a plain input'
+        required: false
+      OCTOMAILTEST_PASS:
+        description: 'Mailbox password (always required)'
+        required: false
+    outputs:
+      status:
+        description: 'passed or failed'
+        value: ${{ jobs.octomailtest.outputs.status }}
+      exit-code:
+        description: 'Exit code of the diagnostics'
+        value: ${{ jobs.octomailtest.outputs.exit-code }}
+      failures:
+        description: 'Number of critical failures'
+        value: ${{ jobs.octomailtest.outputs.failures }}
+      warnings:
+        description: 'Number of warnings'
+        value: ${{ jobs.octomailtest.outputs.warnings }}
+      artifact-name:
+        description: 'Name of the report artifact'
+        value: ${{ jobs.octomailtest.outputs.artifact-name }}
+      artifact-url:
+        description: 'Download page of the report artifact'
+        value: ${{ jobs.octomailtest.outputs.artifact-url }}
+
+  pull_request:
+  push:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  octomailtest:
+    name: Mail diagnostics
+    runs-on: ${{ inputs.runs-on || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    env:
+      # The mailbox may come from inputs (reusable workflow / manual run) or
+      # from repository secrets (manual run, pull_request, push).
+      OMT_HAS_TARGET: >-
+        ${{ (inputs.host != '' || secrets.OCTOMAILTEST_HOST != '')
+        && (inputs.email != '' || secrets.OCTOMAILTEST_EMAIL != '')
+        && secrets.OCTOMAILTEST_PASS != '' }}
+    outputs:
+      status: ${{ steps.octomailtest.outputs.status }}
+      exit-code: ${{ steps.octomailtest.outputs.exit-code }}
+      failures: ${{ steps.octomailtest.outputs.failures }}
+      warnings: ${{ steps.octomailtest.outputs.warnings }}
+      artifact-name: ${{ steps.octomailtest.outputs.artifact-name }}
+      artifact-url: ${{ steps.octomailtest.outputs.artifact-url }}
+
+    steps:
+      # Always check out OctoMailTest itself at the commit this workflow file
+      # comes from, so the action and the workflow stay in sync. When called
+      # from another repository, github.job_workflow_sha points at that
+      # commit; inside this repository github.sha does.
+      - name: Check out OctoMailTest
+        uses: actions/checkout@v4
+        with:
+          repository: octoleo/octomailtest
+          ref: ${{ github.job_workflow_sha || github.sha }}
+          persist-credentials: false
+
+      - name: No mail target configured
+        if: env.OMT_HAS_TARGET != 'true'
+        run: |
+          echo "::notice title=OctoMailTest::No mail target configured (OCTOMAILTEST_HOST, OCTOMAILTEST_EMAIL and OCTOMAILTEST_PASS secrets or inputs are missing), skipping the diagnostics."
+          {
+            echo "## :email: OctoMailTest skipped"
+            echo
+            echo "No mail target is configured for this run. Add the OCTOMAILTEST_HOST, OCTOMAILTEST_EMAIL and OCTOMAILTEST_PASS secrets (and optionally OCTOMAILTEST_DOMAIN), or pass host, email and the OCTOMAILTEST_PASS secret when calling the workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run OctoMailTest
+        if: env.OMT_HAS_TARGET == 'true'
+        id: octomailtest
+        uses: ./
+        with:
+          domain: ${{ inputs.domain || secrets.OCTOMAILTEST_DOMAIN }}
+          host: ${{ inputs.host || secrets.OCTOMAILTEST_HOST }}
+          email: ${{ inputs.email || secrets.OCTOMAILTEST_EMAIL }}
+          pass: ${{ secrets.OCTOMAILTEST_PASS }}
+          mode: ${{ inputs.mode }}
+          imap-port: ${{ inputs.imap-port }}
+          smtp-port: ${{ inputs.smtp-port }}
+          sieve-port: ${{ inputs.sieve-port }}
+          quiet: ${{ inputs.quiet }}
+          timeout: ${{ inputs.timeout }}
+          fail-on-error: ${{ inputs.fail-on-error }}
+          artifact-name: ${{ inputs.artifact-name }}
+          retention-days: ${{ inputs.retention-days }}

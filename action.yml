@@ -1,0 +1,249 @@
+# OctoMailTest - GitHub Action
+#
+# Runs the OctoMailTest mail diagnostics (src/mail and src/imap) on the
+# runner, installs every tool they need, writes a full report and publishes
+# it as a workflow artifact and as the job summary.
+#
+# Usage (no checkout required):
+#
+#   - uses: octoleo/octomailtest@master
+#     with:
+#       domain: example.com
+#       host: mx1.example.com
+#       email: ${{ secrets.OCTOMAILTEST_EMAIL }}
+#       pass: ${{ secrets.OCTOMAILTEST_PASS }}
+#
+# See README.md ("GitHub Action") for all inputs, outputs and examples.
+
+name: 'OctoMailTest'
+description: >-
+  Deep mail-infrastructure diagnostics for a mailbox (DNS, SMTP, IMAP, ManageSieve, TLS,
+  authentication and deliverability). Installs the tools it needs, writes a full report and
+  publishes it as a workflow artifact and job summary.
+author: 'Llewellyn van der Merwe (@llewellynvdm)'
+
+branding:
+  icon: 'mail'
+  color: 'blue'
+
+inputs:
+  domain:
+    description: >-
+      Mail domain for the DNS checks (MX, SPF, DKIM, DMARC, BIMI, MTA-STS, TLS-RPT).
+      Same as OCTOMAILTEST_DOMAIN. Optional, but the DNS checks are skipped without it.
+    required: false
+    default: ''
+  host:
+    description: >-
+      Mail server host name; SMTP, IMAP and ManageSieve are tested on it.
+      Same as OCTOMAILTEST_HOST. Required unless a config-file provides it.
+    required: false
+    default: ''
+  email:
+    description: >-
+      Mailbox address used for the authentication and send-to-self tests.
+      Same as OCTOMAILTEST_EMAIL. Required unless a config-file provides it.
+    required: false
+    default: ''
+  pass:
+    description: >-
+      Mailbox password. Always pass a secret, for example ${{ secrets.OCTOMAILTEST_PASS }}.
+      The action masks it in the logs and scrubs it from the report.
+      Same as OCTOMAILTEST_PASS. Required unless a config-file provides it.
+    required: false
+    default: ''
+  imap-port:
+    description: 'IMAPS port. Same as OCTOMAILTEST_IMAP_PORT. Empty or 0 means 993.'
+    required: false
+    default: ''
+  smtp-port:
+    description: 'SMTP submission port. Same as OCTOMAILTEST_SMTP_PORT. Empty or 0 means 587.'
+    required: false
+    default: ''
+  sieve-port:
+    description: 'ManageSieve port. Same as OCTOMAILTEST_SIEVE_PORT. Empty or 0 means 4190.'
+    required: false
+    default: ''
+  mode:
+    description: 'Which diagnostics to run: both (default), mail or imap. Same as the Docker image command.'
+    required: false
+    default: 'both'
+  config-file:
+    description: >-
+      Path, relative to the workspace, of an .octomailtest file holding DOMAIN, HOST, EMAIL, PASS
+      and the port values. An alternative to the individual inputs.
+    required: false
+    default: ''
+  quiet:
+    description: 'Strip the ===== separator lines from the output, like the --ci flag of the Docker image.'
+    required: false
+    default: 'false'
+  timeout:
+    description: 'Maximum seconds each diagnostic script may run before it is stopped and reported as a failure.'
+    required: false
+    default: '900'
+  install-dependencies:
+    description: >-
+      Install the tools OctoMailTest needs (bash, openssl, dig, nc, GNU coreutils, jq, swaks) when
+      they are missing from the runner. Set to false on runners or containers that already ship them.
+    required: false
+    default: 'true'
+  report-dir:
+    description: 'Directory, relative to the workspace, that receives report.txt, report.json and summary.md.'
+    required: false
+    default: 'octomailtest-report'
+  upload-artifact:
+    description: 'Upload the report directory as a workflow artifact.'
+    required: false
+    default: 'true'
+  artifact-name:
+    description: >-
+      Name of the uploaded artifact. Use a distinct name per job when the action runs several times
+      in one workflow run, because artifact names must be unique within a run.
+    required: false
+    default: 'octomailtest-report'
+  retention-days:
+    description: 'Days to keep the artifact (1 to the repository maximum). Empty or 0 means the repository default.'
+    required: false
+    default: ''
+  fail-on-error:
+    description: 'Fail the job when the diagnostics report critical failures. Set to false to only record the outcome in the outputs.'
+    required: false
+    default: 'true'
+  step-summary:
+    description: 'Write the Markdown summary, including the full report, to the job summary page.'
+    required: false
+    default: 'true'
+  annotations:
+    description: 'Emit GitHub error and warning annotations for the failures found.'
+    required: false
+    default: 'true'
+
+outputs:
+  status:
+    description: 'passed or failed.'
+    value: ${{ steps.run.outputs.status }}
+  exit-code:
+    description: 'Exit code of the diagnostics: 0 on success, 1 on failures, 124 when a script timed out.'
+    value: ${{ steps.run.outputs.exit-code }}
+  failures:
+    description: 'Number of critical failures found.'
+    value: ${{ steps.run.outputs.failures }}
+  warnings:
+    description: 'Number of warnings found.'
+    value: ${{ steps.run.outputs.warnings }}
+  report-dir:
+    description: 'Absolute path of the report directory on the runner.'
+    value: ${{ steps.run.outputs.report-dir }}
+  report-file:
+    description: 'Absolute path of report.txt, the full text report.'
+    value: ${{ steps.run.outputs.report-file }}
+  report-json:
+    description: 'Absolute path of report.json, the machine-readable report.'
+    value: ${{ steps.run.outputs.report-json }}
+  summary-file:
+    description: 'Absolute path of summary.md, the Markdown summary.'
+    value: ${{ steps.run.outputs.summary-file }}
+  artifact-name:
+    description: 'Name of the uploaded artifact.'
+    value: ${{ steps.run.outputs.artifact-name }}
+  artifact-id:
+    description: 'ID of the uploaded artifact (empty when upload-artifact is false).'
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact-url:
+    description: 'Download page of the uploaded artifact (empty when upload-artifact is false).'
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install OctoMailTest dependencies
+      if: ${{ inputs.install-dependencies != 'false' }}
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/action/install.sh"
+
+    - name: Run OctoMailTest diagnostics
+      id: run
+      shell: bash
+      env:
+        OMT_ACTION_PATH: ${{ github.action_path }}
+        OMT_DOMAIN: ${{ inputs.domain }}
+        OMT_HOST: ${{ inputs.host }}
+        OMT_EMAIL: ${{ inputs.email }}
+        OMT_PASS: ${{ inputs.pass }}
+        OMT_IMAP_PORT: ${{ inputs.imap-port }}
+        OMT_SMTP_PORT: ${{ inputs.smtp-port }}
+        OMT_SIEVE_PORT: ${{ inputs.sieve-port }}
+        OMT_MODE: ${{ inputs.mode }}
+        OMT_CONFIG_FILE: ${{ inputs.config-file }}
+        OMT_QUIET: ${{ inputs.quiet }}
+        OMT_TIMEOUT: ${{ inputs.timeout }}
+        OMT_REPORT_DIR: ${{ inputs.report-dir }}
+        OMT_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        OMT_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        OMT_RETENTION_DAYS: ${{ inputs.retention-days }}
+        OMT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        OMT_STEP_SUMMARY: ${{ inputs.step-summary }}
+        OMT_ANNOTATIONS: ${{ inputs.annotations }}
+      run: bash "${GITHUB_ACTION_PATH}/action/run.sh"
+
+    - name: Upload OctoMailTest report artifact
+      id: upload
+      if: ${{ steps.run.outputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      continue-on-error: true
+      with:
+        name: ${{ steps.run.outputs.artifact-name }}
+        path: ${{ steps.run.outputs.report-dir }}
+        retention-days: ${{ steps.run.outputs.retention-days }}
+        if-no-files-found: error
+
+    - name: Publish OctoMailTest job summary
+      if: ${{ steps.run.outputs.step-summary == 'true' }}
+      shell: bash
+      env:
+        OMT_SUMMARY_FILE: ${{ steps.run.outputs.summary-file }}
+        OMT_ARTIFACT_NAME: ${{ steps.run.outputs.artifact-name }}
+        OMT_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        OMT_ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        {
+          cat "$OMT_SUMMARY_FILE"
+          echo
+          case "$OMT_UPLOAD_OUTCOME" in
+            success)
+              echo ":package: Report artifact: [${OMT_ARTIFACT_NAME}](${OMT_ARTIFACT_URL}) (report.txt, report.json, summary.md)"
+              ;;
+            failure)
+              echo ":warning: The report artifact **${OMT_ARTIFACT_NAME}** could not be uploaded; the full report is included above."
+              ;;
+            *)
+              echo ":information_source: Artifact upload is disabled (upload-artifact: false)."
+              ;;
+          esac
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Evaluate OctoMailTest result
+      shell: bash
+      env:
+        OMT_STATUS: ${{ steps.run.outputs.status }}
+        OMT_EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+        OMT_FAILURES: ${{ steps.run.outputs.failures }}
+        OMT_WARNINGS: ${{ steps.run.outputs.warnings }}
+        OMT_FAIL_ON_ERROR: ${{ steps.run.outputs.fail-on-error }}
+        OMT_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        OMT_ARTIFACT_NAME: ${{ steps.run.outputs.artifact-name }}
+      run: |
+        if [[ "$OMT_UPLOAD_OUTCOME" == "failure" ]]; then
+          echo "::error title=OctoMailTest::The report artifact '${OMT_ARTIFACT_NAME}' could not be uploaded, see the upload step above."
+          exit 1
+        fi
+        if [[ "$OMT_STATUS" == "passed" ]]; then
+          echo "OctoMailTest passed (${OMT_WARNINGS} warning(s))."
+          exit 0
+        fi
+        if [[ "$OMT_FAIL_ON_ERROR" == "true" ]]; then
+          echo "::error title=OctoMailTest::Mail diagnostics failed with ${OMT_FAILURES} critical failure(s) (exit code ${OMT_EXIT_CODE}). See the job summary or the report artifact."
+          exit 1
+        fi
+        echo "OctoMailTest found ${OMT_FAILURES} critical failure(s) (exit code ${OMT_EXIT_CODE}), but fail-on-error is false so the job continues."
