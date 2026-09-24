@@ -1,6 +1,8 @@
 FROM alpine:3.20
 
 # Install base tools from stable repos
+# perl-net-ssleay gives swaks its TLS support (--tls); without it the
+# SMTP EHLO, AUTH and send tests fail.
 RUN apk add --no-cache \
 	bash \
 	openssl \
@@ -8,7 +10,9 @@ RUN apk add --no-cache \
 	bind-tools \
 	netcat-openbsd \
 	coreutils \
-	jq
+	jq \
+	perl \
+	perl-net-ssleay
 
 # Install swaks from edge/testing
 RUN apk add --no-cache \

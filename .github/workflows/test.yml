@@ -29,6 +29,9 @@ jobs:
           OCTOMAILTEST_EMAIL: ${{ secrets.OCTOMAILTEST_EMAIL }}
           OCTOMAILTEST_PASS: ${{ secrets.OCTOMAILTEST_PASS }}
         run: |
+          # The full output stays out of the log. On failure only the lines
+          # carrying the failure marker are shown so the cause is visible;
+          # GitHub masks the secret values (host, mailbox, domain) in them.
           set +e
           docker run --rm \
             -e OCTOMAILTEST_DOMAIN \
@@ -36,13 +39,17 @@ jobs:
             -e OCTOMAILTEST_EMAIL \
             -e OCTOMAILTEST_PASS \
             octomailtest:test mail --ci \
-            >/dev/null 2>&1
+            >mail-diagnostics.log 2>&1
           RESULT=$?
           set -e
 
           if [ "$RESULT" -eq 0 ]; then
             echo "✅ Mail diagnostics: PASS"
           else
-            echo "❌ Mail diagnostics: FAIL"
+            echo "❌ Mail diagnostics: FAIL (exit code $RESULT)"
+            echo "Critical failures reported by the diagnostics:"
+            grep -F '❌' mail-diagnostics.log || echo "(no failure lines captured; the script may have aborted early)"
+            tail -n 3 mail-diagnostics.log
             exit 1
           fi
+          rm -f mail-diagnostics.log
