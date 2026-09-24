@@ -47,7 +47,7 @@ inputs:
     default: ''
   pass:
     description: >-
-      Mailbox password. Always pass a secret, for example ${{ secrets.OCTOMAILTEST_PASS }}.
+      Mailbox password. Always pass it from a secret (for example the OCTOMAILTEST_PASS secret).
       The action masks it in the logs and scrubs it from the report.
       Same as OCTOMAILTEST_PASS. Required unless a config-file provides it.
     required: false
