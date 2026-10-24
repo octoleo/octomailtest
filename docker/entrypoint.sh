@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Handle opt-in output/history features outside the existing test cycle.
+if [[ "${OCTOMAILTEST_WRAPPED:-}" != 1 ]]; then
+	_omt_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+	[[ -f "${_omt_dir}/lib/cli.sh" ]] || _omt_dir="${_omt_dir}/.."
+	if [[ -f "${_omt_dir}/lib/cli.sh" ]]; then
+		# shellcheck disable=SC1091
+		source "${_omt_dir}/lib/cli.sh"
+		omt_cli_dispatch docker "$0" "$@"
+	else
+		_omt_required="${OCTOMAILTEST_PRIVATE:-}${OCTOMAILTEST_ALIAS:-}${OCTOMAILTEST_HISTORY:-}${OCTOMAILTEST_HISTORY_KEEP:-}${OCTOMAILTEST_HISTORY_DIR:-}"
+		for _omt_arg in "$@"; do
+			case "$_omt_arg" in --private|--alias|--history|--history-keep|--history-dir) _omt_required=1 ;; esac
+		done
+		if [[ -n "$_omt_required" ]]; then
+			printf '%s\n' 'OctoMailTest: privacy/history requires the accompanying lib directory.' >&2
+			exit 1
+		fi
+	fi
+fi
+
 #############################################
 # Defaults
 #############################################
@@ -49,6 +69,11 @@ Options:
   --ci, --quiet    Suppress banners and separators
   --json           Emit JSON output (CI-friendly)
   -L, --log FILE   Write output to FILE (also stdout)
+  --private       Anonymize identifiers while retaining test details
+  --alias NAME    Public system label (default: OctoMailTest)
+  --history       Keep timestamped findings and a cumulative run count
+  --history-keep N Retained runs (default: 10)
+  --history-dir PATH History directory (default: octomailtest-history)
 
 Environment:
   OCTOMAILTEST_*   Passed directly to scripts

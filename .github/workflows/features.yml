@@ -1,0 +1,42 @@
+name: Privacy and history
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  features:
+    name: Offline feature tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare macOS test tools
+        if: runner.os == 'macOS'
+        run: |
+          brew list --versions coreutils >/dev/null || brew install coreutils
+          command -v jq >/dev/null || brew install jq
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Check Bash syntax
+        run: |
+          for file in lib/*.sh action/execute.sh action/commit-history.sh src/mail src/imap docker/entrypoint.sh tests/*.sh; do
+            bash -n "$file"
+          done
+      - name: Check new shell code
+        if: runner.os == 'Linux'
+        run: shellcheck -x lib/*.sh action/execute.sh action/commit-history.sh tests/*.sh
+      - name: Test privacy and history without a mail server
+        run: |
+          bash tests/privacy.sh
+          bash tests/history.sh
+          bash tests/cli.sh
+          bash tests/action.sh

@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Optional presentation/history layer; the diagnostic cycle below is unchanged.
+if [[ "${OCTOMAILTEST_WRAPPED:-}" != 1 ]]; then
+	_omt_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+	[[ -f "${_omt_dir}/lib/cli.sh" ]] || _omt_dir="${_omt_dir}/.."
+	if [[ -f "${_omt_dir}/lib/cli.sh" ]]; then
+		# shellcheck disable=SC1091
+		source "${_omt_dir}/lib/cli.sh"
+		omt_cli_dispatch diagnostic "$0" "$@"
+	else
+		_omt_required="${OCTOMAILTEST_PRIVATE:-}${OCTOMAILTEST_ALIAS:-}${OCTOMAILTEST_HISTORY:-}${OCTOMAILTEST_HISTORY_KEEP:-}${OCTOMAILTEST_HISTORY_DIR:-}"
+		for _omt_arg in "$@"; do
+			case "$_omt_arg" in --private|--alias|--history|--history-keep|--history-dir) _omt_required=1 ;; esac
+		done
+		if [[ -n "$_omt_required" ]]; then
+			printf '%s\n' 'OctoMailTest: privacy/history requires the accompanying lib directory.' >&2
+			exit 1
+		fi
+	fi
+fi
+
 #############################################
 # Defaults (LOWEST priority)
 #############################################
@@ -123,7 +143,16 @@ Options:
   -c, --config       Config file (default: ./.octomailtest)
   --help             Show this help
 
+Privacy/history options:
+  --private          Anonymize identifiers while retaining test details
+  --alias NAME       Public label (default: OctoMailTest)
+  --history          Record timestamped findings and a cumulative run count
+  --history-keep N   Retained runs (default: 10)
+  --history-dir PATH Relative history directory (default: octomailtest-history)
+
 Environment variables:
+  OCTOMAILTEST_PRIVATE / OCTOMAILTEST_ALIAS
+  OCTOMAILTEST_HISTORY / OCTOMAILTEST_HISTORY_KEEP / OCTOMAILTEST_HISTORY_DIR
   OCTOMAILTEST_DOMAIN
   OCTOMAILTEST_HOST
   OCTOMAILTEST_EMAIL
