@@ -118,7 +118,7 @@ omt_cli_execute() (
 	# shellcheck disable=SC1091
 	source "${library}/privacy.sh"
 	omt_privacy_validate_alias "$alias" || { omt_cli_error; exit 1; }
-	[[ "$keep" =~ ^[1-9][0-9]*$ && ${#keep} -le 6 ]] || { omt_cli_error; exit 1; }
+	[[ "$keep" =~ ^[1-9][0-9]*$ ]] || { omt_cli_error; exit 1; }
 	if [[ "$history" == true || "$format" == json ]]; then
 		command -v jq >/dev/null 2>&1 || { omt_cli_error; exit 1; }
 	fi

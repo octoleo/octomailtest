@@ -24,7 +24,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew list --versions coreutils >/dev/null || brew install coreutils
+          brew list --versions bash >/dev/null || brew install bash
           command -v jq >/dev/null || brew install jq
+          # Docker ships current Bash; its existing entrypoint is not a Bash 3 script.
+          echo "$(brew --prefix bash)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
       - name: Check Bash syntax
         run: |
