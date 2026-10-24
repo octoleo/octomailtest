@@ -212,8 +212,8 @@ runs:
       uses: actions/checkout@v4
       with:
         ref: ${{ github.ref_name }}
+        path: .octomailtest-history-repository
         persist-credentials: true
-        clean: false
 
     - name: Install OctoMailTest dependencies
       if: ${{ inputs.install-dependencies != 'false' }}
@@ -293,6 +293,7 @@ runs:
     - name: Commit OctoMailTest history
       if: ${{ inputs.history-commit == 'true' && steps.run.outputs.history-dir != '' }}
       shell: bash
+      working-directory: ${{ github.workspace }}/.octomailtest-history-repository
       env:
         OMT_HISTORY_DIR: ${{ steps.run.outputs.history-dir }}
         OMT_HISTORY_ALIAS: ${{ inputs.alias }}

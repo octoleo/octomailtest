@@ -212,8 +212,10 @@ history needs a writable bind mount or volume to survive `docker run --rm`.
 
 ### Commit daily history from GitHub Actions
 
-The `history-commit` action option checks out the calling repository and
-commits the alias's history after recording the result. It requires
+The `history-commit` action option checks out the calling repository into
+`.octomailtest-history-repository` and commits the alias's history there after
+recording the result. This separate checkout preserves the caller's existing
+working files and staged changes. It requires
 `history: true`, a branch-based run (`schedule`, `workflow_dispatch`, or
 `push`), and `contents: write` permission. Pull request runs cannot push
 history. Only the selected alias's history directory is staged; unrelated
