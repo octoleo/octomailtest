@@ -58,6 +58,14 @@ on:
         description: 'ManageSieve port (0 = 4190)'
         type: number
         default: 0
+      private:
+        description: Anonymize identifiers while preserving diagnostic details
+        type: boolean
+        default: false
+      alias:
+        description: Public label for private diagnostics
+        type: string
+        default: OctoMailTest
       quiet:
         description: 'Strip the ===== separator lines (like --ci)'
         type: boolean
@@ -113,6 +121,14 @@ on:
         description: 'ManageSieve port (0 = 4190)'
         type: number
         default: 0
+      private:
+        description: Anonymize identifiers while preserving diagnostic details
+        type: boolean
+        default: false
+      alias:
+        description: Public label for private diagnostics
+        type: string
+        default: OctoMailTest
       quiet:
         description: 'Strip the ===== separator lines (like --ci)'
         type: boolean
@@ -232,6 +248,8 @@ jobs:
           imap-port: ${{ inputs.imap-port }}
           smtp-port: ${{ inputs.smtp-port }}
           sieve-port: ${{ inputs.sieve-port }}
+          private: ${{ inputs.private }}
+          alias: ${{ inputs.alias }}
           quiet: ${{ inputs.quiet }}
           timeout: ${{ inputs.timeout }}
           fail-on-error: ${{ inputs.fail-on-error }}

@@ -29,6 +29,7 @@ WORKDIR /app/octomailtest
 COPY src/mail mail
 COPY src/imap imap
 COPY docker/entrypoint.sh entrypoint.sh
+COPY lib lib
 
 # Permissions
 RUN chmod +x mail imap entrypoint.sh \

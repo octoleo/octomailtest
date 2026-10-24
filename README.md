@@ -48,7 +48,8 @@ OctoMailTest performs:
 - PTR validation
 - SMTP feature discovery
 
-No mail data is modified unless you explicitly allow the send test.
+The mail diagnostic sends one test email to the configured mailbox itself
+when `swaks` is installed. It does not delete mail.
 
 ---
 
@@ -65,7 +66,7 @@ OCTOMAILTEST_PASS=secret
 OCTOMAILTEST_IMAP_PORT=993
 OCTOMAILTEST_SMTP_PORT=587
 OCTOMAILTEST_SIEVE_PORT=4190
-````
+```
 
 You may also place these in `.octomailtest`.
 
@@ -110,19 +111,168 @@ Useful for pipelines and logs.
 
 ## Private diagnostics and run history
 
-The private diagnostics interface is `--private --alias Bingo` (or the
-action inputs `private: true` and `alias: Bingo`). It retains each test and
-its findings while anonymizing identifying values before they reach logs,
-reports, annotations, or summaries. Private mode is independent of quiet
-mode: it does not remove the diagnostic detail.
+### Keep the findings, anonymize the target
 
-Run history is opt-in with `--history`, `--history-keep` (default `10`), and
-`--history-dir` (default `octomailtest-history`). Each alias has a cumulative
-run counter and a bounded set of timestamped findings, with a generated
-README linking the retained reports. Equivalent action inputs are `history`,
-`history-keep`, and `history-dir`; `history-commit` additionally commits and
-pushes the history to the calling repository with `contents: write` permission.
-History includes failed diagnostic runs and does not change their result.
+Use `--private --alias Bingo` to retain the diagnostic messages while
+anonymizing the target. The action equivalents are `private: true` and
+`alias: Bingo`. Private mode is independent of `--quiet`: test names,
+outcomes, warnings, and failure explanations remain visible.
+
+Configured domains, hosts, and mailbox addresses receive consistent alias
+labels. Discovered domains, addresses, IPs, and identifying certificate or
+authentication data are redacted as well. Technical findings such as port
+numbers, TLS versions, ciphers, and certificate expiry remain useful.
+Anonymization happens before output is published to the console, report
+files, GitHub annotations, or the job summary. Both stdout and stderr are
+covered. JSON and file logging receive the anonymized findings too.
+Existing content in an append-only `--log` file is not rewritten; use a new
+file when switching from ordinary output to private output. In the action,
+identifying artifact names and report locations are replaced with alias-based
+names, and runner machine names are anonymized. Only the three generated
+report files are uploaded, so unrelated files in a report directory are excluded.
+
+The diagnostic commands, their order, and their existing pass/fail rules
+are unchanged. Private mode changes how results are presented.
+
+With the usual `OCTOMAILTEST_*` credentials already exported, run from the
+repository root:
+
+```bash
+./src/mail --private --alias Bingo
+./src/imap --private --alias Bingo
+```
+
+Keep the repository's `lib` directory with the scripts when using these
+options. Private text output uses the existing shell tools; `jq` is needed
+for history and Docker JSON output. The new privacy and history settings
+are supplied through CLI options or the environment, not `.octomailtest`.
+
+Or use Docker:
+
+```bash
+docker run --rm \
+  -e OCTOMAILTEST_DOMAIN \
+  -e OCTOMAILTEST_HOST \
+  -e OCTOMAILTEST_EMAIL \
+  -e OCTOMAILTEST_PASS \
+  octoleo/octomailtest both --private --alias Bingo
+```
+
+The alias is intentionally public. Use an unrelated label rather than a
+real domain, mailbox, or server name. Aliases start with a letter or digit
+and contain letters, digits, underscores, or hyphens, up to 64 characters.
+The default alias is `OctoMailTest`. Supply credentials through environment variables or
+GitHub secrets; private mode cannot redact commands your shell prints
+before starting the program.
+
+### Retain a bounded run history
+
+Enable history with `--history`. `--history-keep` sets how many recent runs
+to retain (a positive integer, default `10`), and `--history-dir` sets the
+repository-relative directory (default `octomailtest-history`). For example:
+
+```bash
+./src/mail --private --alias Bingo \
+  --history --history-keep 20 --history-dir octomailtest-history
+```
+
+Each alias has its own directory:
+
+| Path | Contents |
+|---|---|
+| `octomailtest-history/Bingo/README.md` | Run counter, cumulative outcomes, and links to the retained findings |
+| `octomailtest-history/Bingo/history.json` | Machine-readable cumulative counters and recent run entries |
+| `octomailtest-history/Bingo/runs/<sequence>/` | The run's text report, JSON report, and Markdown summary |
+
+Entries include UTC timestamps, the result, and the recorded findings.
+Failed diagnostic runs are retained too. Pruning old reports does not reset
+the cumulative run counter. Different aliases have independent counters
+and retention limits. A history write failure is reported as an error; it
+does not silently replace an existing history or reset its counter.
+
+Retention applies to the current history directory and index. If history
+is committed to Git, older reports remain accessible in earlier commits;
+pruning the current files does not rewrite Git history.
+
+History follows the current privacy mode. To prevent a private history
+from retaining previously unredacted reports, an alias directory cannot
+mix private and non-private runs. Start a new directory when changing the
+privacy mode of an existing history.
+
+The generated history README provides links to the reports. Link it from
+your repository README with:
+
+```markdown
+[Bingo test history](octomailtest-history/Bingo/README.md)
+```
+
+OctoMailTest does not rewrite the caller's root README. Stand-alone history
+writes local files; committing them is a separate operation. Container
+history needs a writable bind mount or volume to survive `docker run --rm`.
+
+### Commit daily history from GitHub Actions
+
+The `history-commit` action option checks out the calling repository and
+commits the alias's history after recording the result. It requires
+`history: true`, a branch-based run (`schedule`, `workflow_dispatch`, or
+`push`), and `contents: write` permission. Pull request runs cannot push
+history. Only the selected alias's history directory is staged; unrelated
+files are not included, and pushes never use force.
+
+This complete example keeps the last ten detailed private reports. All
+target values come from secrets; the public name is Bingo:
+
+```yaml
+name: Bingo
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *' # Daily at 02:17 UTC / 04:17 Namibia time
+
+permissions:
+  contents: write
+
+# Use the same group in every workflow that commits history to this repo.
+concurrency:
+  group: octomailtest-history
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Bingo
+        uses: octoleo/octomailtest@master
+        with:
+          domain: ${{ secrets.BINGO_DOMAIN }}
+          host: ${{ secrets.BINGO_HOST }}
+          email: ${{ secrets.BINGO_EMAIL }}
+          pass: ${{ secrets.BINGO_PASS }}
+          private: true
+          alias: Bingo
+          quiet: false
+          history: true
+          history-keep: 10
+          history-dir: octomailtest-history
+          history-commit: true
+```
+
+Pin the action to the reviewed commit or release when deploying it. No
+separate checkout or commit step is needed for `history-commit`. Failed
+diagnostic results are recorded before the action applies `fail-on-error`,
+so a history update does not turn a failed check into a successful one.
+Branch protection rules must permit the workflow's history commits.
+
+The CLI environment equivalents are:
+
+| Environment variable | Default |
+|---|---|
+| `OCTOMAILTEST_PRIVATE` | `false` |
+| `OCTOMAILTEST_ALIAS` | `OctoMailTest` |
+| `OCTOMAILTEST_HISTORY` | `false` |
+| `OCTOMAILTEST_HISTORY_KEEP` | `10` |
+| `OCTOMAILTEST_HISTORY_DIR` | `octomailtest-history` |
 
 ---
 
@@ -225,8 +375,13 @@ and `OCTOMAILTEST_EMAIL` instead of inputs, so a caller whose repository
 already defines the `OCTOMAILTEST_*` secrets can simply use
 `secrets: inherit`. The workflow accepts the same options as the action
 (`mode`, ports, `quiet`, `timeout`, `fail-on-error`, `artifact-name`,
-`retention-days`, `runs-on`) and exposes `status`, `exit-code`, `failures`,
+`retention-days`, `private`, `alias`, `runs-on`) and exposes `status`, `exit-code`, `failures`,
 `warnings`, `artifact-name` and `artifact-url` as outputs.
+
+The reusable workflow keeps read-only repository permissions and checks
+out OctoMailTest itself. For run history and automatic history commits,
+use the composite action directly, as shown in
+[Commit daily history from GitHub Actions](#commit-daily-history-from-github-actions).
 
 In this repository the workflow also runs on every pull request and push to
 `master` (using the repository's `OCTOMAILTEST_*` secrets) and can be
@@ -246,6 +401,12 @@ started manually from the **Actions** tab.
 | `mode` | `both` | `both`, `mail` or `imap`, like the Docker image command. |
 | `config-file` | | Path of an `.octomailtest` file (see `.octomailtest.example`) as an alternative to the inputs above. |
 | `quiet` | `false` | Strip the `=====` separator lines, like `--ci`. |
+| `private` | `false` | Anonymize identifying values in detailed output and reports. Independent of `quiet`. |
+| `alias` | `OctoMailTest` | Public target label and history subdirectory; 1–64 letters, digits, underscores, or hyphens, starting with a letter or digit. |
+| `history` | `false` | Record timestamped results, cumulative counters, and retained reports locally. |
+| `history-keep` | `10` | Positive number of recent runs to retain per alias; cumulative counters are not pruned. |
+| `history-dir` | `octomailtest-history` | Safe relative directory beneath the repository, containing one subdirectory per alias. |
+| `history-commit` | `false` | With `history: true`, check out the caller and commit/push its updated alias history. Requires a branch run and `contents: write`. |
 | `timeout` | `900` | Seconds each diagnostic script may run before it is stopped and reported as a failure. |
 | `install-dependencies` | `true` | Install missing tools. Set to `false` on runners that already ship everything. |
 | `report-dir` | `octomailtest-report` | Directory (relative to the workspace) that receives the report files. |
@@ -270,6 +431,8 @@ scripts themselves.
 | `warnings` | Number of warnings |
 | `report-dir`, `report-file`, `report-json`, `summary-file` | Absolute paths of the report directory and files on the runner |
 | `artifact-name`, `artifact-id`, `artifact-url` | Name, id and download page of the uploaded artifact |
+| `history-dir`, `history-index` | Absolute paths of the updated alias history directory and its README, when history is enabled |
+| `history-count` | Cumulative number of recorded runs for this alias, including reports removed by retention |
 
 ```yaml
       - id: mail
@@ -290,14 +453,16 @@ workflow details and a summary footer with the per-script result and the
 failure and warning counts. `report.json` carries the same output plus the
 parsed failure and warning messages, the target, timing and workflow
 metadata, and `summary.md` is the Markdown shown on the job summary page.
+With `private: true`, those reports contain anonymized findings while
+preserving the individual test messages and outcomes.
 
 ### Good to know
 
 - Like every OctoMailTest run, the action **sends one test email to the
   mailbox itself** as part of the SMTP send test when `swaks` is available.
-- The password is masked in the workflow log and scrubbed from the report
-  files before they are uploaded. Still, treat the artifact as internal:
-  it names the host and the mailbox.
+- Without private mode, reports identify the target host and mailbox.
+  Enable `private: true` when publishing detailed results from a public
+  workflow, and pass all target values through GitHub secrets.
 - `src/imap` is informational and never fails by itself; `src/mail` decides
   the pass/fail result.
 - Supported runners: Linux (`ubuntu-latest` is the tested target; Debian,
@@ -337,10 +502,15 @@ Configuration precedence:
 
 ## Security notes
 
-* Passwords are never logged in clear text
-* TLS verification is enforced
-* No mail deletion occurs
-* All send tests are explicit
+* Private mode anonymizes diagnostic output before publication, including
+  reports, summaries, and annotations. It does not encrypt the reports.
+* Treat the public alias, workflow names, and configured report/history
+  paths as public labels; do not put identifying values in them.
+* The runner still needs the real connection details and credentials to
+  perform the tests. Keep those in GitHub secrets or a protected local
+  configuration, and use a dedicated test mailbox.
+* No mail deletion occurs. The existing mail diagnostic sends a test
+  message to the configured mailbox itself when `swaks` is available.
 
 ---
 

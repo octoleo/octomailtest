@@ -74,6 +74,30 @@ inputs:
       and the port values. An alternative to the individual inputs.
     required: false
     default: ''
+  private:
+    description: 'Anonymize identifying values while retaining detailed diagnostics and reports.'
+    required: false
+    default: 'false'
+  alias:
+    description: 'Public label: letters, digits, underscores and hyphens (maximum 64 characters).'
+    required: false
+    default: 'OctoMailTest'
+  history:
+    description: 'Record cumulative per-alias counters and retained timestamped reports in the workspace.'
+    required: false
+    default: 'false'
+  history-keep:
+    description: 'Positive number of recent reports to retain per alias; cumulative counts are never pruned.'
+    required: false
+    default: '10'
+  history-dir:
+    description: 'Repository-relative history directory; each alias gets its own subdirectory and README.'
+    required: false
+    default: 'octomailtest-history'
+  history-commit:
+    description: 'Check out the caller branch and commit/push its history. Requires history: true and contents: write.'
+    required: false
+    default: 'false'
   quiet:
     description: 'Strip the ===== separator lines from the output, like the --ci flag of the Docker image.'
     required: false
@@ -120,6 +144,15 @@ inputs:
     default: 'true'
 
 outputs:
+  history-dir:
+    description: 'History directory for this alias.'
+    value: ${{ steps.run.outputs.history-dir }}
+  history-index:
+    description: 'Generated README linking the retained reports.'
+    value: ${{ steps.run.outputs.history-index }}
+  history-count:
+    description: 'Cumulative number of recorded runs for this alias.'
+    value: ${{ steps.run.outputs.history-count }}
   status:
     description: 'passed or failed.'
     value: ${{ steps.run.outputs.status }}
@@ -157,6 +190,31 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate history commit context
+      if: ${{ inputs.history-commit == 'true' }}
+      shell: bash
+      env:
+        OMT_EVENT: ${{ github.event_name }}
+        OMT_REF_TYPE: ${{ github.ref_type }}
+        OMT_HISTORY: ${{ inputs.history }}
+      run: |
+        if [[ "$OMT_HISTORY" != true || "$OMT_REF_TYPE" != branch ]]; then
+          echo '::error::History commits require history: true and a branch workflow.'
+          exit 1
+        fi
+        case "$OMT_EVENT" in
+          schedule|workflow_dispatch|push) ;;
+          *) echo '::error::History commits require a scheduled, manual, or push run.'; exit 1 ;;
+        esac
+
+    - name: Check out history repository
+      if: ${{ inputs.history-commit == 'true' }}
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.ref_name }}
+        persist-credentials: true
+        clean: false
+
     - name: Install OctoMailTest dependencies
       if: ${{ inputs.install-dependencies != 'false' }}
       shell: bash
@@ -177,6 +235,12 @@ runs:
         OMT_MODE: ${{ inputs.mode }}
         OMT_CONFIG_FILE: ${{ inputs.config-file }}
         OMT_QUIET: ${{ inputs.quiet }}
+        OMT_PRIVATE: ${{ inputs.private }}
+        OMT_ALIAS: ${{ inputs.alias }}
+        OMT_HISTORY: ${{ inputs.history }}
+        OMT_HISTORY_KEEP: ${{ inputs.history-keep }}
+        OMT_HISTORY_DIR: ${{ inputs.history-dir }}
+        OMT_HISTORY_COMMIT: ${{ inputs.history-commit }}
         OMT_TIMEOUT: ${{ inputs.timeout }}
         OMT_REPORT_DIR: ${{ inputs.report-dir }}
         OMT_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
@@ -185,7 +249,7 @@ runs:
         OMT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
         OMT_STEP_SUMMARY: ${{ inputs.step-summary }}
         OMT_ANNOTATIONS: ${{ inputs.annotations }}
-      run: bash "${GITHUB_ACTION_PATH}/action/run.sh"
+      run: bash "${GITHUB_ACTION_PATH}/action/execute.sh"
 
     - name: Upload OctoMailTest report artifact
       id: upload
@@ -194,7 +258,10 @@ runs:
       continue-on-error: true
       with:
         name: ${{ steps.run.outputs.artifact-name }}
-        path: ${{ steps.run.outputs.report-dir }}
+        path: |
+          ${{ steps.run.outputs.report-file }}
+          ${{ steps.run.outputs.report-json }}
+          ${{ steps.run.outputs.summary-file }}
         retention-days: ${{ steps.run.outputs.retention-days }}
         if-no-files-found: error
 
@@ -222,6 +289,16 @@ runs:
               ;;
           esac
         } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Commit OctoMailTest history
+      if: ${{ inputs.history-commit == 'true' && steps.run.outputs.history-dir != '' }}
+      shell: bash
+      env:
+        OMT_HISTORY_DIR: ${{ steps.run.outputs.history-dir }}
+        OMT_HISTORY_ALIAS: ${{ inputs.alias }}
+        OMT_HISTORY_COUNT: ${{ steps.run.outputs.history-count }}
+        OMT_HISTORY_BRANCH: ${{ github.ref_name }}
+      run: bash "${GITHUB_ACTION_PATH}/action/commit-history.sh"
 
     - name: Evaluate OctoMailTest result
       shell: bash
