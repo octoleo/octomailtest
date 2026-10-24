@@ -118,6 +118,10 @@ anonymizing the target. The action equivalents are `private: true` and
 `alias: Bingo`. Private mode is independent of `--quiet`: test names,
 outcomes, warnings, and failure explanations remain visible.
 
+Private text output streams each sanitized line as the diagnostic scripts
+emit it, including in the running action's log. Saved reports and the job
+summary are generated after the diagnostics finish.
+
 Configured domains, hosts, and mailbox addresses receive consistent alias
 labels. Discovered domains, addresses, IPs, and identifying certificate or
 authentication data are redacted as well. Technical findings such as port

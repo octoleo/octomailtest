@@ -22,6 +22,33 @@ AUTH64=$(printf '\0%s\0%s' "$EMAIL" "$PASS" | base64 | tr -d '\n')
 export OMT_PRIVACY_CONFIG_DOMAIN=other.example OMT_PRIVACY_CONFIG_HOST=mx.other.example
 # shellcheck disable=SC2016
 export OMT_PRIVACY_CONFIG_EMAIL=admin@other.example OMT_PRIVACY_CONFIG_PASS='config$ecret'
+
+# Require useful sanitized output while stdin is still open. A completed-output
+# assertion cannot detect a filter that buffers every short line until EOF.
+(
+	mkfifo "$TEMP/live-input" "$TEMP/live-output"
+	exec 8<> "$TEMP/live-input"
+	(
+		exec 8>&-
+		# shellcheck disable=SC2016 # Positional arguments expand in the child shell.
+		exec timeout 15 bash -c 'source "$1"; omt_privacy_filter Bingo "$2" "$3" "$4" "$5"' \
+			_ "$ROOT/lib/privacy.sh" "$DOMAIN" "$HOST" "$EMAIL" "$PASS"
+	) < "$TEMP/live-input" > "$TEMP/live-output" &
+	filter_pid=$!
+	trap 'exec 8>&- 9>&-; kill "$filter_pid" 2>/dev/null || true; wait "$filter_pid" 2>/dev/null || true' EXIT
+	exec 9< "$TEMP/live-output"
+	printf 'SMTP connectivity on %s:587\n' "$HOST" >&8
+	IFS= read -r -t 5 first <&9 || fail 'private output did not arrive while diagnostic input remained open'
+	[[ "$first" == 'SMTP connectivity on [Bingo host]:587' ]] || fail 'first live result was not anonymized'
+	printf 'SMTP authentication for %s: PASS; password %s\n' "$EMAIL" "$PASS" >&8
+	IFS= read -r -t 5 second <&9 || fail 'subsequent private output was buffered'
+	[[ "$second" == 'SMTP authentication for [Bingo email]: PASS; password [Bingo redacted]' ]] || fail 'second live result lost privacy or detail'
+	exec 8>&-
+	wait "$filter_pid" || fail 'live privacy filter failed'
+	exec 9>&-
+	trap - EXIT
+)
+
 {
 	printf 'Mail Diagnostics for %s\nHost: %s\nUser: %s\n' "$DOMAIN" "$HOST" "$EMAIL"
 	printf 'Case variants: MX.CUSTOMER.EXAMPLE TEST+MONITOR@CUSTOMER.EXAMPLE\n'
