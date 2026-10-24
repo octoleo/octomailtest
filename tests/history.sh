@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/history.sh
 source "${ROOT}/lib/history.sh"
 TMP="$(mktemp -d)"
+TMP="$(cd "$TMP" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir "$TMP/repository" "$TMP/reports"
 JSON="$TMP/reports/report.json"

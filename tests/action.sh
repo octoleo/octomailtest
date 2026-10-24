@@ -3,6 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMP="$(mktemp -d)"
+TEMP="$(cd "$TEMP" && pwd -P)"
 trap 'rm -rf -- "$TEMP"' EXIT
 mkdir -p "$TEMP/action/action" "$TEMP/action/src" "$TEMP/action/lib" "$TEMP/bin" "$TEMP/work"
 cp "$ROOT/action/run.sh" "$ROOT/action/execute.sh" "$TEMP/action/action/"
@@ -86,4 +87,12 @@ if grep -R 'ConfigOnlySecret' report octomailtest-history "$TEMP/config.log"; th
 	echo 'FAIL: incomplete configuration escaped anonymization.' >&2; exit 1
 fi
 rm .octomailtest
+
+# Auto-commit history belongs to its own checkout, not the caller working tree.
+mkdir .octomailtest-history-repository
+before="$(jq -r .total_runs octomailtest-history/Bingo/history.json)"
+export GITHUB_OUTPUT="$TEMP/isolated.outputs"
+OMT_HISTORY_COMMIT=true GITHUB_WORKSPACE="$PWD" bash "$TEMP/action/action/execute.sh" > "$TEMP/isolated.log" 2>&1
+jq -e '.total_runs == 1' .octomailtest-history-repository/octomailtest-history/Bingo/history.json >/dev/null
+[[ "$(jq -r .total_runs octomailtest-history/Bingo/history.json)" == "$before" ]]
 echo 'PASS: action privacy, outcomes, failure history, retention and report paths'

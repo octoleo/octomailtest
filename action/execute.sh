@@ -84,7 +84,7 @@ if [[ "$PRIVATE" == true ]]; then
 else
 	RUNNER_LABEL="${RUNNER_NAME:-}"
 fi
-[[ "$REPORT_DIR" == /* ]] || REPORT_DIR="$PWD/$REPORT_DIR"
+[[ "$REPORT_DIR" == /* ]] || REPORT_DIR="$(pwd -P)/$REPORT_DIR"
 check_path="$REPORT_DIR"
 while [[ "$check_path" != / ]]; do
 	[[ ! -L "$check_path" ]] || { echo '::error::Report paths must not contain symlinks.'; exit 1; }
@@ -162,8 +162,12 @@ output retention-days "${OMT_RETENTION_DAYS:-}"
 if [[ "$HISTORY" == true ]]; then
 	# shellcheck source=lib/history.sh
 	source "$ACTION_PATH/lib/history.sh"
+	HISTORY_ROOT="$(pwd -P)"
+	if [[ "$HISTORY_COMMIT" == true ]]; then
+		HISTORY_ROOT="${GITHUB_WORKSPACE:?}/.octomailtest-history-repository"
+	fi
 	omt_history_record "$ALIAS" "${OMT_HISTORY_DIR:-octomailtest-history}" "${OMT_HISTORY_KEEP:-10}" \
-		"$REPORT_DIR/report.json" "$REPORT_DIR/report.txt" "$REPORT_DIR/summary.md" "$PWD"
+		"$REPORT_DIR/report.json" "$REPORT_DIR/report.txt" "$REPORT_DIR/summary.md" "$HISTORY_ROOT"
 	output history-dir "$OMT_HISTORY_DIR"
 	output history-index "$OMT_HISTORY_INDEX"
 	output history-count "$OMT_HISTORY_COUNT"
