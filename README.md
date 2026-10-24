@@ -108,6 +108,22 @@ docker run octoleo/octomailtest --ci
 
 Useful for pipelines and logs.
 
+## Private diagnostics and run history
+
+The private diagnostics interface is `--private --alias Bingo` (or the
+action inputs `private: true` and `alias: Bingo`). It retains each test and
+its findings while anonymizing identifying values before they reach logs,
+reports, annotations, or summaries. Private mode is independent of quiet
+mode: it does not remove the diagnostic detail.
+
+Run history is opt-in with `--history`, `--history-keep` (default `10`), and
+`--history-dir` (default `octomailtest-history`). Each alias has a cumulative
+run counter and a bounded set of timestamped findings, with a generated
+README linking the retained reports. Equivalent action inputs are `history`,
+`history-keep`, and `history-dir`; `history-commit` additionally commits and
+pushes the history to the calling repository with `contents: write` permission.
+History includes failed diagnostic runs and does not change their result.
+
 ---
 
 ## JSON output
