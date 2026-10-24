@@ -13,10 +13,18 @@ omt_privacy_validate_alias() {
 omt_privacy_filter() {
 	local alias=${1:-OctoMailTest} domain=${2:-} host=${3:-} email=${4:-} password=${5:-}
 	local password_b64 email_b64 auth_b64 password_shell config_b64 config_email_b64 config_auth config_shell
+	local awk_options=()
 	if ! omt_privacy_validate_alias "$alias"; then
 		printf '%s\n' 'Invalid private alias: use 1-64 letters, digits, underscores or hyphens.' >&2
 		return 2
 	fi
+	# mawk buffers pipe input even when every output line is flushed. Its
+	# interactive mode reads complete lines as they arrive, so private logs
+	# stay live while a diagnostic waits for a server response. GNU/BSD awk
+	# already read this way. Never let this implementation probe read stdin.
+	case "$(LC_ALL=C awk -W version </dev/null 2>&1)" in
+		mawk*) awk_options=(-W interactive) ;;
+	esac
 	password_b64=$(printf '%s' "$password" | base64 | tr -d '\n') || return 1
 	email_b64=$(printf '%s' "$email" | base64 | tr -d '\n') || return 1
 	auth_b64=$(printf '\0%s\0%s' "$email" "$password" | base64 | tr -d '\n') || return 1
@@ -33,7 +41,7 @@ omt_privacy_filter() {
 	OMT_PRIVATE_CONFIG_SHELL="$config_shell" \
 	OMT_PRIVACY_CONFIG_DOMAIN="${OMT_PRIVACY_CONFIG_DOMAIN:-}" OMT_PRIVACY_CONFIG_HOST="${OMT_PRIVACY_CONFIG_HOST:-}" \
 	OMT_PRIVACY_CONFIG_EMAIL="${OMT_PRIVACY_CONFIG_EMAIL:-}" OMT_PRIVACY_CONFIG_PASS="${OMT_PRIVACY_CONFIG_PASS:-}" \
-	LC_ALL=C awk '
+	LC_ALL=C awk ${awk_options[@]+"${awk_options[@]}"} '
 	function token(label, id) {
 		id = ++token_count
 		labels[id] = "[" alias " " label "]"

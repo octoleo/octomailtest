@@ -17,13 +17,17 @@ cat > "$TEMP/action/src/mail" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'SMTP connectivity on %s:587\n' "$OCTOMAILTEST_HOST"
+if [[ "$MOCK_SCENARIO" == stream ]]; then
+	IFS= read -r -t 15 release < "$MOCK_RELEASE_FIFO"
+	[[ "$release" == continue ]]
+fi
 printf 'Mail domain %s; mailbox %s\n' "$OCTOMAILTEST_DOMAIN" "$OCTOMAILTEST_EMAIL"
 printf 'Resolved IP: 198.51.100.27; PTR: other.example.net\n'
 printf 'TLS protocol: TLSv1.3; cipher: TLS_AES_256_GCM_SHA384\n'
 printf 'Certificate expires in 72 days\n'
 printf 'Password: %s\n' "$OCTOMAILTEST_PASS" >&2
 case "$MOCK_SCENARIO" in
-	pass) printf 'SMTP authentication: PASS\n' ;;
+	pass|stream) printf 'SMTP authentication: PASS\n' ;;
 	fail) printf '[mock] ❌ Authentication failed at other.example.net\n' >&2; exit 1 ;;
 	timeout) sleep 3 ;;
 esac
@@ -95,4 +99,53 @@ export GITHUB_OUTPUT="$TEMP/isolated.outputs"
 OMT_HISTORY_COMMIT=true GITHUB_WORKSPACE="$PWD" bash "$TEMP/action/action/execute.sh" > "$TEMP/isolated.log" 2>&1
 jq -e '.total_runs == 1' .octomailtest-history-repository/octomailtest-history/Bingo/history.json >/dev/null
 [[ "$(jq -r .total_runs octomailtest-history/Bingo/history.json)" == "$before" ]]
+
+# Exercise the full action pipeline while a diagnostic waits for the consumer
+# to receive its first result. Only then may it produce the remaining findings.
+(
+	mkfifo "$TEMP/action-release" "$TEMP/action-live-output"
+	exec 8<> "$TEMP/action-release"
+	(
+		exec 8>&-
+		export MOCK_SCENARIO=stream MOCK_RELEASE_FIFO="$TEMP/action-release"
+		export OMT_TIMEOUT=20 OMT_HISTORY_DIR=live-history OMT_REPORT_DIR=live-report
+		export GITHUB_OUTPUT="$TEMP/live.outputs"
+		exec timeout 30 bash "$TEMP/action/action/execute.sh"
+	) > "$TEMP/action-live-output" 2>&1 &
+	action_pid=$!
+	trap 'exec 8>&- 9>&-; kill "$action_pid" 2>/dev/null || true; wait "$action_pid" 2>/dev/null || true' EXIT
+	exec 9< "$TEMP/action-live-output"
+	deadline=$((SECONDS + 5))
+	live_result=false
+	while (( SECONDS < deadline )); do
+		IFS= read -r -t "$((deadline - SECONDS))" line <&9 || break
+		printf '%s\n' "$line" >> "$TEMP/live.log"
+		if [[ "$line" == 'SMTP connectivity on [Bingo host]:587' ]]; then
+			live_result=true
+			break
+		fi
+	done
+	if [[ "$live_result" != true ]]; then
+		echo 'FAIL: action withheld diagnostic output while the test was running.' >&2
+		exit 1
+	fi
+	[[ ! -e live-report/report.json ]]
+	kill -0 "$action_pid"
+	printf 'continue\n' >&8
+	exec 8>&-
+	cat <&9 >> "$TEMP/live.log"
+	wait "$action_pid"
+	exec 9>&-
+	trap - EXIT
+)
+grep -q 'SMTP authentication: PASS' "$TEMP/live.log"
+grep -q 'Detailed IMAP test completed' "$TEMP/live.log"
+grep -q 'SMTP connectivity on \[Bingo host\]:587' live-report/report.txt
+grep -q 'SMTP authentication: PASS' live-report/report.txt
+jq -e '.status == "passed" and .exit_code == 0' live-report/report.json >/dev/null
+jq -e '.total_runs == 1 and .passed_runs == 1' live-history/Bingo/history.json >/dev/null
+if grep -RE 'private\.example|other\.example\.net|198\.51\.100\.27|mock-password' live-report live-history "$TEMP/live.log"; then
+	echo 'FAIL: live action output or its retained reports exposed an identifier.' >&2
+	exit 1
+fi
 echo 'PASS: action privacy, outcomes, failure history, retention and report paths'
