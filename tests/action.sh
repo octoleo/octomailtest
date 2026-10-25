@@ -107,6 +107,8 @@ jq -e '.total_runs == 1' .octomailtest-history-repository/octomailtest-history/B
 
 # Exercise the full action pipeline while a diagnostic waits for the consumer
 # to receive its first result. Only then may it produce the remaining findings.
+# Fixture exports are intentionally confined to this subshell and its child.
+# shellcheck disable=SC2030,SC2031
 (
 	mkfifo "$TEMP/action-release" "$TEMP/action-live-output"
 	exec 8<> "$TEMP/action-release"
@@ -156,6 +158,8 @@ fi
 
 # The action forwards transport configuration to both diagnostics while reports
 # distinguish the submission connection from the dedicated protocol checks.
+# Each call deliberately starts with the caller's environment, not prior cases.
+# shellcheck disable=SC2030,SC2031
 check_smtp_settings() (
 	local label="$1" port="$2" mode="$3" starttls_port="$4" smtps_port="$5"
 	local expected_mode="$6" expected_starttls="$7" expected_smtps="$8"
@@ -193,6 +197,8 @@ check_smtp_settings implicit-custom 2465 IMPLICIT 2587 2466 implicit 2587 2466
 check_smtp_settings starttls-custom 2587 starttls 0 0 starttls 2587 465
 
 # Unset action inputs retain the environment fallback and config-file precedence.
+# This fixture's exports must not affect the following configuration fixture.
+# shellcheck disable=SC2030,SC2031
 (
 	export OMT_SMTP_PORT='' OMT_SMTP_TLS_MODE='' OMT_SMTP_STARTTLS_PORT='' OMT_SMTPS_PORT=''
 	export OCTOMAILTEST_SMTP_PORT=2465 OCTOMAILTEST_SMTP_TLS_MODE=implicit
@@ -213,6 +219,8 @@ check_smtp_settings starttls-custom 2587 starttls 0 0 starttls 2587 465
 	jq -e '.target.smtp_port == 465 and .target.smtp_tls_mode == "implicit"
 		and .target.smtp_starttls_port == 587 and .target.smtps_port == 465' smtp-inputs/report.json >/dev/null
 )
+# Config settings are isolated from the previous environment-based fixture.
+# shellcheck disable=SC2030,SC2031
 (
 	unset OCTOMAILTEST_SMTP_PORT OCTOMAILTEST_SMTP_TLS_MODE OCTOMAILTEST_SMTP_STARTTLS_PORT OCTOMAILTEST_SMTPS_PORT
 	export OMT_SMTP_PORT='' OMT_SMTP_TLS_MODE='' OMT_SMTP_STARTTLS_PORT='' OMT_SMTPS_PORT=''
@@ -226,6 +234,8 @@ check_smtp_settings starttls-custom 2587 starttls 0 0 starttls 2587 465
 		and .target.smtp_starttls_port == null and .target.smtps_port == null' smtp-config/report.json >/dev/null
 	grep -q 'from config file' smtp-config/summary.md
 )
+# Invalid configuration is confined to its own fixture environment.
+# shellcheck disable=SC2030,SC2031
 (
 	export OMT_SMTP_TLS_MODE=unsupported OMT_HISTORY=false OMT_REPORT_DIR=smtp-invalid
 	export GITHUB_OUTPUT="$TEMP/smtp-invalid.outputs"

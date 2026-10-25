@@ -137,7 +137,7 @@ run_case custom-auto-starttls 2587 starttls 2587 465 0 --smtp-port 2587
 run_case explicit-starttls 465 starttls 465 2465 0 --smtp-port 465 --smtp-tls-mode starttls --smtps-port 2465
 run_case custom-implicit 2465 implicit 1587 3465 0 --smtp-port 2465 --smtp-tls-mode implicit --smtp-starttls-port 1587 --smtps-port 3465
 run_case custom-starttls 2587 starttls 1587 3465 0 --smtp-port 2587 --smtp-tls-mode starttls --smtp-starttls-port 1587 --smtps-port 3465
-OCTOMAILTEST_WRAPPED= run_case private-custom-implicit 2465 implicit 1587 3465 0 --private --alias Bingo --smtp-port 2465 --smtp-tls-mode implicit --smtp-starttls-port 1587 --smtps-port 3465
+OCTOMAILTEST_WRAPPED='' run_case private-custom-implicit 2465 implicit 1587 3465 0 --private --alias Bingo --smtp-port 2465 --smtp-tls-mode implicit --smtp-starttls-port 1587 --smtps-port 3465
 for private in mx.example.invalid fixture@example.invalid fixture-password; do
 	if grep -Fq -- "$private" "$TEMP/private-custom-implicit.log"; then fail 'private transport run exposed an identifier'; fi
 done
