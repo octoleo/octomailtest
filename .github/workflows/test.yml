@@ -8,17 +8,17 @@ on:
 
 jobs:
   test:
-    name: Mail diagnostics (${{ matrix.transport }})
+    name: Mail diagnostics (${{ matrix.configuration }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - transport: STARTTLS
-            smtp-port: '587'
-            smtp-tls-mode: starttls
-          - transport: SMTPS
+          - configuration: Default ports
+            smtp-port: ''
+            imap-port: ''
+          - configuration: Secure port overrides
             smtp-port: '465'
-            smtp-tls-mode: implicit
+            imap-port: '993'
     runs-on: ubuntu-latest
 
     steps:
@@ -40,7 +40,7 @@ jobs:
           OCTOMAILTEST_EMAIL: ${{ secrets.OCTOMAILTEST_EMAIL }}
           OCTOMAILTEST_PASS: ${{ secrets.OCTOMAILTEST_PASS }}
           OCTOMAILTEST_SMTP_PORT: ${{ matrix.smtp-port }}
-          OCTOMAILTEST_SMTP_TLS_MODE: ${{ matrix.smtp-tls-mode }}
+          OCTOMAILTEST_IMAP_PORT: ${{ matrix.imap-port }}
         run: |
           # The full output stays out of the log. On failure only the lines
           # carrying the failure marker are shown so the cause is visible;
@@ -52,8 +52,8 @@ jobs:
             -e OCTOMAILTEST_EMAIL \
             -e OCTOMAILTEST_PASS \
             -e OCTOMAILTEST_SMTP_PORT \
-            -e OCTOMAILTEST_SMTP_TLS_MODE \
-            octomailtest:test mail --ci \
+            -e OCTOMAILTEST_IMAP_PORT \
+            octomailtest:test mail --private --alias OctoMailTestCI \
             >mail-diagnostics.log 2>&1
           RESULT=$?
           set -e

@@ -118,7 +118,7 @@ omt_privacy_filter() {
 		while (match(s, regex)) {
 			at = RSTART; n = RLENGTH; value = substr(s, at, n)
 			# Fixed report filenames are not target identities.
-			if (kind == "IP" && dnsbl_response && value ~ /^127\./) replacement = value
+			if (kind == "IP" && ((dnsbl_response && value ~ /^127\./) || (dnsbl_error && value ~ /^127\.255\.255\./))) replacement = value
 			else if (kind == "host" && (value == "report.txt" || value == "report.json" || value == "summary.md" || value == "history.json" || value == "README.md")) replacement = value
 			else replacement = identifier(value, kind)
 			out = out substr(s, 1, at - 1) replacement
@@ -156,6 +156,54 @@ omt_privacy_filter() {
 		}
 		return out s
 	}
+	function port_values(s, regex, out, at, n, value, digits, prefix) {
+		# Match only an explicit port context. Global numeric substitution
+		# would also hide timestamps, counters, TLS versions and certificate dates.
+		out = ""
+		while (match(tolower(s), regex)) {
+			at = RSTART; n = RLENGTH; value = substr(s, at, n)
+			match(value, /[0-9]+$/); digits = RSTART
+			prefix = substr(value, 1, digits - 1)
+			out = out substr(s, 1, at - 1) prefix port_token
+			s = substr(s, at + n)
+		}
+		return out s
+	}
+	function ports(s, out, at, n, value) {
+		# Hosts and addresses have already become protected tokens. This covers
+		# normal, bracketed IPv6 and command-line host:port forms without
+		# interpreting a time such as 14:25:00 as a network endpoint.
+		out = ""
+		while (match(s, /\036[0-9]+\037\]?:[0-9]+/)) {
+			at = RSTART; n = RLENGTH; value = substr(s, at, n)
+			sub(/:[0-9]+$/, ":" port_token, value)
+			out = out substr(s, 1, at - 1) value
+			s = substr(s, at + n)
+		}
+		s = out s
+		# A port list may contain several numbers after one label.
+		out = ""
+		while (match(tolower(s), /(^|[^[:alnum:]])ports?[[:space:]:=|]+[0-9]+([[:space:],\/]+[0-9]+)*/)) {
+			at = RSTART; n = RLENGTH; value = substr(s, at, n)
+			gsub(/[0-9]+/, port_token, value)
+			out = out substr(s, 1, at - 1) value
+			s = substr(s, at + n)
+		}
+		s = out s
+		s = port_values(s, "(^|[^[:alnum:]])(smtp|smtps|imap|imaps|sieve|managesieve|pop3|pop3s)([[:space:]]+(submission|relay|starttls|implicit tls))?([[:space:]]+on)?[[:space:]:=|]+[0-9]+")
+		s = port_values(s, "(^|[^[:alnum:]])(starttls|implicit tls)[[:space:]]+on[[:space:]]+[0-9]+")
+		# netcat prints the number before the word port.
+		out = ""
+		while (match(tolower(s), /[0-9]+[[:space:]]+port([^[:alnum:]]|$)/)) {
+			at = RSTART; n = RLENGTH; value = substr(s, at, n)
+			sub(/^[0-9]+/, port_token, value)
+			out = out substr(s, 1, at - 1) value
+			s = substr(s, at + n)
+		}
+		s = out s
+		if (tolower(s) ~ /port/) s = port_values(s, "default[[:space:]:=]+[0-9]+")
+		return s
+	}
 	function add_secret(s, parts, j, lines) {
 		if (s == "") return
 		secrets[++secret_count] = s
@@ -170,7 +218,7 @@ omt_privacy_filter() {
 		alias = ENVIRON["OMT_PRIVATE_ALIAS"]
 		domain = ENVIRON["OMT_PRIVATE_DOMAIN"]; host = ENVIRON["OMT_PRIVATE_HOST"]; email = ENVIRON["OMT_PRIVATE_EMAIL"]
 		config_domain = ENVIRON["OMT_PRIVACY_CONFIG_DOMAIN"]; config_host = ENVIRON["OMT_PRIVACY_CONFIG_HOST"]; config_email = ENVIRON["OMT_PRIVACY_CONFIG_EMAIL"]
-		domain_token = token("domain"); host_token = token("host"); email_token = token("email"); secret_token = token("redacted")
+		domain_token = token("domain"); host_token = token("host"); email_token = token("email"); secret_token = token("redacted"); port_token = token("port")
 		workflow_delimiter = sprintf("\036%d\037", ++token_count); labels[token_count] = "::"
 		public_services["zen.spamhaus.org"] = 1; public_services["bl.spamcop.net"] = 1
 		public_services["b.barracudacentral.org"] = 1; public_services["dnsbl.sorbs.net"] = 1
@@ -221,6 +269,7 @@ omt_privacy_filter() {
 		line = protect(line)
 		# DNSBL 127/8 responses are status/error codes, not the target address.
 		dnsbl_response = (line ~ /LISTED on (zen\.spamhaus\.org|bl\.spamcop\.net|b\.barracudacentral\.org|dnsbl\.sorbs\.net):/)
+		dnsbl_error = (line ~ /zen\.spamhaus\.org/ && tolower(line) ~ /(lookup|query|resolver|response)/)
 		# Certificate DNs can contain customer organizations and locations too.
 		if (line ~ /^[[:space:]]*(subject|issuer)[[:space:]]*=/) sub(/=.*/, "=" token("certificate identity"), line)
 		if (line ~ /^[[:space:]]*(Peer certificate|Server certificate)[[:space:]]*:/) sub(/:.*/, ": " token("certificate identity"), line)
@@ -251,12 +300,14 @@ omt_privacy_filter() {
 		line = ipv6(line)
 		line = pattern(line, "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+", "IP")
 		line = pattern(line, "([A-Za-z0-9_][A-Za-z0-9_-]*\\.)+[A-Za-z][A-Za-z0-9-]+\\.?", "host")
+		line = ports(line)
 		print restore(line)
 		fflush()
 	}'
 }
 
-# Sanitize JSON string values, preserving JSON types, keys and escaping.
+# Sanitize JSON strings and replace private port metadata with explicit labels.
+# Other JSON types, keys and escaping are preserved.
 # OctoMailTest uses fixed schema keys, never target-derived keys. Raw input is
 # temporary, mode 0600, and removed on exit; no parse error echoes raw JSON.
 omt_privacy_json() (
@@ -284,5 +335,17 @@ omt_privacy_json() (
 		sanitized+=$trailing
 		jq -nc --argjson path "$path" --arg value "$sanitized" '{path: $path, value: $value}' >> "$scratch/updates.jsonl" || return 1
 	done < "$scratch/paths"
-	jq --slurpfile updates "$scratch/updates.jsonl" 'reduce $updates[] as $update (. ; setpath($update.path; $update.value))' "$scratch/input.json"
+	jq --arg alias "$alias" --slurpfile updates "$scratch/updates.jsonl" '
+		{smtp_relay_port:"SMTP relay port",smtp_port:"SMTP port",smtps_port:"SMTPS port",
+		 imap_port:"IMAP port",imaps_port:"IMAPS port",sieve_port:"Sieve port",port:"port"} as $port_labels |
+		def private_ports:
+			if type == "array" then map(private_ports)
+			elif type == "object" then with_entries(
+				.key as $key |
+				if ($port_labels | has($key)) and .value != null
+				then .value = ("[" + $alias + " " + $port_labels[$key] + "]")
+				else .value |= private_ports end)
+			else . end;
+		reduce $updates[] as $update (. ; setpath($update.path; $update.value)) | private_ports
+	' "$scratch/input.json"
 )

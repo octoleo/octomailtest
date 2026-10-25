@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Optional presentation/history layer; the diagnostic cycle below is unchanged.
+# Optional presentation/history layer around the diagnostics below.
 if [[ "${OCTOMAILTEST_WRAPPED:-}" != 1 ]]; then
 	_omt_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 	[[ -f "${_omt_dir}/lib/cli.sh" ]] || _omt_dir="${_omt_dir}/.."
@@ -28,7 +28,8 @@ fi
 HOST=""
 EMAIL=""
 PASS=""
-IMAP_PORT=993
+IMAP_PORT=143
+IMAPS_PORT=993
 INTERACTIVE=0
 
 CONFIG_FILE="./.octomailtest"
@@ -50,6 +51,7 @@ HOST="${OCTOMAILTEST_HOST:-${HOST:-}}"
 EMAIL="${OCTOMAILTEST_EMAIL:-${EMAIL:-}}"
 PASS="${OCTOMAILTEST_PASS:-${PASS:-}}"
 IMAP_PORT="${OCTOMAILTEST_IMAP_PORT:-${IMAP_PORT}}"
+IMAPS_PORT="${OCTOMAILTEST_IMAPS_PORT:-${IMAPS_PORT}}"
 
 #############################################
 # 3) Parse command-line arguments
@@ -63,7 +65,8 @@ Options:
   -h, --host         Hostname
   -e, --email        Email address
   -p, --pass         Password
-  --imap-port        IMAP port
+  --imap-port PORT   Alternative IMAP endpoint (default: 143)
+  --imaps-port PORT  Required secure IMAP endpoint (default: 993)
   -c, --config       Config file (default: ./.octomailtest)
   --interactive      Enable interactive TLS test
   --help             Show this help
@@ -82,6 +85,7 @@ Environment variables:
   OCTOMAILTEST_EMAIL
   OCTOMAILTEST_PASS
   OCTOMAILTEST_IMAP_PORT
+  OCTOMAILTEST_IMAPS_PORT
 
 Precedence:
   1) Command-line options
@@ -90,6 +94,8 @@ Precedence:
   4) Defaults
 
 Notes:
+  Both endpoints are tested. TLS mode is detected before authentication.
+  Empty or zero ports use their defaults; duplicate endpoints are tested once.
   Interactive mode is automatically disabled in Docker, CI, and non-TTY runs.
 EOF
 }
@@ -99,7 +105,14 @@ while [[ $# -gt 0 ]]; do
 		-h|--host) HOST="$2"; shift 2 ;;
 		-e|--email) EMAIL="$2"; shift 2 ;;
 		-p|--pass) PASS="$2"; shift 2 ;;
-		--imap-port) IMAP_PORT="$2"; shift 2 ;;
+		--imap-port|--imaps-port)
+			if [[ $# -lt 2 || -z "${2:-}" ]]; then
+				echo "Error: port option requires a value." >&2
+				exit 1
+			fi
+			if [[ "$1" == --imap-port ]]; then IMAP_PORT="$2"; else IMAPS_PORT="$2"; fi
+			shift 2
+			;;
 		--interactive) INTERACTIVE=1; shift ;;
 		-c|--config)
 			CONFIG_FILE="$2"
@@ -125,10 +138,31 @@ done
 # 4) Validation
 #############################################
 
-if [[ -z "$HOST" || -z "$EMAIL" || -z "$PASS" || -z "$IMAP_PORT" ]]; then
-	echo "Error: HOST, EMAIL, PASS, IMAP_PORT must be set." >&2
+if [[ -z "$HOST" || -z "$EMAIL" || -z "$PASS" ]]; then
+	echo "Error: HOST, EMAIL, PASS must be set." >&2
 	exit 1
 fi
+
+imap_port_value() {
+	local value="${1:-$2}"
+	[[ "$value" != 0 ]] || value="$2"
+	if [[ ! "$value" =~ ^[0-9]+$ || ${#value} -gt 5 ]]; then
+		echo 'Error: IMAP ports must be integers between 1 and 65535.' >&2
+		return 1
+	fi
+	value=$((10#$value))
+	if (( value < 1 || value > 65535 )); then
+		echo 'Error: IMAP ports must be integers between 1 and 65535.' >&2
+		return 1
+	fi
+	printf '%s' "$value"
+}
+IMAP_PORT="$(imap_port_value "$IMAP_PORT" 143)"
+IMAPS_PORT="$(imap_port_value "$IMAPS_PORT" 993)"
+
+for tool in openssl timeout grep mktemp tee; do
+	command -v "$tool" >/dev/null 2>&1 || { echo "Error: required command $tool is unavailable." >&2; exit 1; }
+done
 
 #############################################
 # 5) Execution mode detection
@@ -143,90 +177,201 @@ fi
 # Diagnostics
 #############################################
 
-echo "================================================="
-echo " Detailed IMAP Protocol Test"
-echo " Host: $HOST:$IMAP_PORT"
-echo "================================================="
-echo
+# Probe without credentials. Standard ports choose the first attempt only;
+# custom ports, or services using a different handshake, are detected as well.
+imap_detect_tls() {
+	local port="$1" mode probe
+	local modes=(starttls implicit) args=()
+	[[ "$port" != 993 ]] || modes=(implicit starttls)
+	for mode in "${modes[@]}"; do
+		args=(-connect "$HOST:$port" -servername "$HOST")
+		[[ "$mode" != starttls ]] || args+=(-starttls imap)
+		if probe="$(timeout 5 openssl s_client "${args[@]}" -brief < /dev/null 2>&1)" \
+			&& printf '%s\n' "$probe" | grep -Eqi 'Protocol( version)?[[:space:]]*:[[:space:]]*TLSv|New, TLSv'; then
+			printf '%s' "$mode"
+			return 0
+		fi
+	done
+	return 1
+}
 
-echo "Test 1: IMAP Greeting and CAPABILITY"
-echo "================================================="
-(
-	sleep 2
-	printf "a001 CAPABILITY\r\n"
-	sleep 3
-	printf "a002 LOGOUT\r\n"
-	sleep 2
-) | timeout 15 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
-	| grep -v "^depth=" | grep -v "^verify" | head -20 || true
+# Keep each original conversation and timing. Both configured endpoints receive
+# the same protocol diagnostics after their TLS connection has been established.
+imap_commands() {
+	case "$1" in
+		capability)
+			sleep 2
+			printf 'a001 CAPABILITY\r\n'
+			sleep 3
+			printf 'a002 LOGOUT\r\n'
+			sleep 2
+			;;
+		authentication)
+			sleep 2
+			printf 'a001 LOGIN %s %s\r\n' "$EMAIL" "$PASS"
+			sleep 3
+			printf 'a002 LOGOUT\r\n'
+			sleep 2
+			;;
+		folders)
+			sleep 2
+			printf 'a001 LOGIN %s %s\r\n' "$EMAIL" "$PASS"
+			sleep 3
+			printf 'a002 LIST "" "*"\r\n'
+			sleep 4
+			printf 'a003 LOGOUT\r\n'
+			sleep 2
+			;;
+		idle)
+			sleep 2
+			printf 'a001 LOGIN %s %s\r\n' "$EMAIL" "$PASS"
+			sleep 3
+			printf 'a002 SELECT INBOX\r\n'
+			sleep 3
+			printf 'a003 IDLE\r\n'
+			sleep 4
+			printf 'DONE\r\n'
+			sleep 2
+			printf 'a004 LOGOUT\r\n'
+			sleep 2
+			;;
+	esac
+}
 
-echo
-echo "================================================="
-echo "Test 2: IMAP Authentication"
-echo "================================================="
-(
-	sleep 2
-	printf "a001 LOGIN %s %s\r\n" "$EMAIL" "$PASS"
-	sleep 3
-	printf "a002 LOGOUT\r\n"
-	sleep 2
-) | timeout 15 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
-	| grep -v "^depth=" | grep -v "^verify" | head -20 || true
+# Display replies as they arrive while retaining a private copy for the outcome.
+# Consume all replies after the display limit, avoiding head-induced SIGPIPE.
+imap_display() {
+	local limit="$1" count=0 line
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		case "$line" in depth=*|verify*) continue ;; esac
+		if (( limit == 0 || count < limit )); then printf '%s\n' "$line"; fi
+		count=$((count + 1))
+	done
+}
 
-echo
-echo "================================================="
-echo "Test 3: IMAP List Folders"
-echo "================================================="
-(
-	sleep 2
-	printf "a001 LOGIN %s %s\r\n" "$EMAIL" "$PASS"
-	sleep 3
-	printf "a002 LIST \"\" \"*\"\r\n"
-	sleep 4
-	printf "a003 LOGOUT\r\n"
-	sleep 2
-) | timeout 20 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
-	| grep -v "^depth=" | grep -v "^verify" || true
+imap_conversation() {
+	local name="$1" seconds="$2" display_limit="$3"
+	IMAP_REPLY="$IMAP_TEMP/$IMAP_CURRENT_PORT-$name.txt"
+	# Protocol replies determine the result. Retain output on timeout/disconnect
+	# so an endpoint failure never prevents the other endpoint's diagnostics.
+	imap_commands "$name" \
+		| timeout "$seconds" openssl s_client "${IMAP_OPENSSL_ARGS[@]}" -quiet 2>&1 \
+		| tee "$IMAP_REPLY" | imap_display "$display_limit" || true
+}
 
-echo
-echo "================================================="
-echo "Test 4: IMAP SELECT and IDLE"
-echo "================================================="
-(
-	sleep 2
-	printf "a001 LOGIN %s %s\r\n" "$EMAIL" "$PASS"
-	sleep 3
-	printf "a002 SELECT INBOX\r\n"
-	sleep 3
-	printf "a003 IDLE\r\n"
-	sleep 4
-	printf "DONE\r\n"
-	sleep 2
-	printf "a004 LOGOUT\r\n"
-	sleep 2
-) | timeout 25 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet 2>&1 \
-	| grep -v "^depth=" | grep -v "^verify" | head -30 || true
+imap_endpoint_failure() {
+	IMAP_ENDPOINT_FAILURES=$((IMAP_ENDPOINT_FAILURES + 1))
+	printf '⚠️  %s port %s: %s\n' "$IMAP_ENDPOINT_LABEL" "$IMAP_CURRENT_PORT" "$*"
+}
 
-#############################################
-# Optional interactive test
-#############################################
+imap_expect_ok() {
+	local tag="$1" finding="$2"
+	if grep -Eqi "^${tag}[[:space:]]+OK([[:space:]]|$)" "$IMAP_REPLY"; then
+		printf '✅ %s\n' "$finding"
+	else
+		imap_endpoint_failure "$finding failed or did not complete"
+	fi
+}
 
-if [[ "$INTERACTIVE" -eq 1 ]]; then
+umask 077
+IMAP_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/octomailtest-imap.XXXXXX")"
+trap 'rm -rf -- "$IMAP_TEMP"' EXIT
+IMAP_ENDPOINTS=("$IMAP_PORT")
+[[ "$IMAPS_PORT" == "$IMAP_PORT" ]] || IMAP_ENDPOINTS+=("$IMAPS_PORT")
+IMAP_SECURE_PASSED=0
+IMAP_ALTERNATIVE_FAILED=0
+
+for IMAP_CURRENT_PORT in "${IMAP_ENDPOINTS[@]}"; do
+	if [[ "$IMAP_CURRENT_PORT" == "$IMAPS_PORT" ]]; then
+		IMAP_ENDPOINT_LABEL='IMAPS required'
+	else
+		IMAP_ENDPOINT_LABEL='IMAP alternative'
+	fi
+	echo '================================================='
+	echo ' Detailed IMAP Protocol Test'
+	echo " $IMAP_ENDPOINT_LABEL port $IMAP_CURRENT_PORT"
+	echo " Host: $HOST:$IMAP_CURRENT_PORT"
+	echo '================================================='
+	echo "Detecting TLS connection mode for $IMAP_ENDPOINT_LABEL port $IMAP_CURRENT_PORT"
+	if ! IMAP_TLS_MODE="$(imap_detect_tls "$IMAP_CURRENT_PORT")"; then
+		printf '⚠️  %s port %s: unavailable; it may be closed or unable to establish TLS. Protocol and authentication tests could not run.\n' "$IMAP_ENDPOINT_LABEL" "$IMAP_CURRENT_PORT"
+		[[ "$IMAP_CURRENT_PORT" == "$IMAPS_PORT" ]] || IMAP_ALTERNATIVE_FAILED=1
+		continue
+	fi
+	IMAP_OPENSSL_ARGS=(-connect "$HOST:$IMAP_CURRENT_PORT" -servername "$HOST")
+	if [[ "$IMAP_TLS_MODE" == starttls ]]; then
+		IMAP_OPENSSL_ARGS+=(-starttls imap)
+		echo "✅ $IMAP_ENDPOINT_LABEL port $IMAP_CURRENT_PORT: STARTTLS connection established"
+	else
+		echo "✅ $IMAP_ENDPOINT_LABEL port $IMAP_CURRENT_PORT: implicit TLS connection established"
+	fi
+	IMAP_ENDPOINT_FAILURES=0
+
 	echo
-	echo "================================================="
-	echo "Interactive TLS session"
-	echo "================================================="
-	echo "Type: a001 CAPABILITY"
-	echo "Then: a002 LOGOUT"
+	echo 'Test 1: IMAP Greeting and CAPABILITY'
+	echo '================================================='
+	imap_conversation capability 15 20
+	imap_expect_ok a001 'IMAP CAPABILITY'
+
 	echo
-	timeout 30 openssl s_client -connect "$HOST:$IMAP_PORT" -quiet || true
-else
+	echo '================================================='
+	echo 'Test 2: IMAP Authentication'
+	echo '================================================='
+	imap_conversation authentication 15 20
+	imap_expect_ok a001 'IMAP authentication'
+
 	echo
-	echo "ℹ️  Interactive TLS test skipped (non-interactive mode)"
+	echo '================================================='
+	echo 'Test 3: IMAP List Folders'
+	echo '================================================='
+	imap_conversation folders 20 0
+	imap_expect_ok a002 'IMAP folder listing'
+
+	echo
+	echo '================================================='
+	echo 'Test 4: IMAP SELECT and IDLE'
+	echo '================================================='
+	imap_conversation idle 25 30
+	imap_expect_ok a002 'IMAP SELECT INBOX'
+	if grep -Eqi '^a003[[:space:]]+OK([[:space:]]|$)' "$IMAP_REPLY"; then
+		echo '✅ IMAP IDLE completed'
+	else
+		printf '⚠️  %s port %s: optional IDLE extension unavailable or did not complete\n' "$IMAP_ENDPOINT_LABEL" "$IMAP_CURRENT_PORT"
+	fi
+
+	if [[ "$INTERACTIVE" -eq 1 ]]; then
+		echo
+		echo '================================================='
+		echo "Interactive TLS session ($IMAP_ENDPOINT_LABEL port $IMAP_CURRENT_PORT)"
+		echo '================================================='
+		echo 'Type: a001 CAPABILITY'
+		echo 'Then: a002 LOGOUT'
+		timeout 30 openssl s_client "${IMAP_OPENSSL_ARGS[@]}" -quiet || true
+	else
+		echo
+		echo 'ℹ️  Interactive TLS test skipped (non-interactive mode)'
+	fi
+
+	if (( IMAP_ENDPOINT_FAILURES == 0 )); then
+		[[ "$IMAP_CURRENT_PORT" != "$IMAPS_PORT" ]] || IMAP_SECURE_PASSED=1
+		echo "✅ $IMAP_ENDPOINT_LABEL port $IMAP_CURRENT_PORT: protocol and authentication checks passed"
+	else
+		[[ "$IMAP_CURRENT_PORT" == "$IMAPS_PORT" ]] || IMAP_ALTERNATIVE_FAILED=1
+		printf '⚠️  %s port %s: %s required protocol check(s) failed\n' "$IMAP_ENDPOINT_LABEL" "$IMAP_CURRENT_PORT" "$IMAP_ENDPOINT_FAILURES"
+	fi
+done
+
+echo
+
+echo '================================================='
+if (( IMAP_SECURE_PASSED == 0 )); then
+	echo '❌ Required secure IMAP endpoint failed its TLS, protocol, or authentication checks.'
+	echo ' Test completed with errors'
+	echo '================================================='
+	exit 1
 fi
-
-echo
-echo "================================================="
-echo " Test completed"
-echo "================================================="
-
+if (( IMAP_ALTERNATIVE_FAILED > 0 )); then
+	echo '⚠️  The IMAP alternative failed; the required secure endpoint passed.'
+fi
+echo ' IMAP test completed successfully'
+echo '================================================='

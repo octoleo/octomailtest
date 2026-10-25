@@ -40,7 +40,8 @@ contains plain.log customer.example
 bash "$TEMP/diagnostic" --private --alias Bingo > private.log 2>&1
 for private in "$OCTOMAILTEST_DOMAIN" "$OCTOMAILTEST_EMAIL" "$OCTOMAILTEST_PASS"; do excludes private.log "$private"; done
 contains private.log '[Bingo host]'
-contains private.log 'Port 587: open'
+contains private.log 'Port [Bingo port]: open'
+excludes private.log '587'
 contains private.log 'Protocol: TLSv1.3'
 MOCK_RC=7 expect_exit 7 bash "$TEMP/diagnostic" --private --alias Bingo > failure.log 2>&1
 contains failure.log '❌ Authentication failed'
@@ -86,7 +87,8 @@ chmod +x app/mail app/imap
 cd app
 bash entrypoint.sh both --private --alias Bingo --json --log results.log > result.json
 jq -e '.status == "passed" and .private == true and (.output | contains("SMTP test")) and (.output | contains("IMAP test"))' result.json >/dev/null
-contains results.log 'Port 587: open'
+contains results.log 'Port [Bingo port]: open'
+excludes results.log '587'
 excludes results.log customer.example
 excludes result.json customer.example
 rm imap-executed

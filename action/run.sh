@@ -71,6 +71,16 @@ parse_uint() {
 	printf '%s' "$v"
 }
 
+parse_port() {
+	# Empty/0 inputs leave an inherited port override available to the engine.
+	local value
+	value="$(parse_uint "$1" "$2" '')" || return
+	if [[ -z "$value" ]]; then
+		value="$(parse_uint "$1" "$3" '')" || return
+	fi
+	printf '%s' "$value"
+}
+
 format_duration() {
 	printf '%dm %02ds' $(( $1 / 60 )) $(( $1 % 60 ))
 }
@@ -107,16 +117,12 @@ EMAIL="${OMT_EMAIL:-${OCTOMAILTEST_EMAIL:-}}"
 PASS="${OMT_PASS:-${OCTOMAILTEST_PASS:-}}"
 CONFIG_FILE="${OMT_CONFIG_FILE:-}"
 
-IMAP_PORT="$(parse_uint imap-port "${OMT_IMAP_PORT:-${OCTOMAILTEST_IMAP_PORT:-}}" '')"
-SMTP_PORT="$(parse_uint smtp-port "${OMT_SMTP_PORT:-${OCTOMAILTEST_SMTP_PORT:-}}" '')"
-SMTP_TLS_MODE="$(lower "${OMT_SMTP_TLS_MODE:-${OCTOMAILTEST_SMTP_TLS_MODE:-}}")"
-case "$SMTP_TLS_MODE" in
-	''|auto|starttls|implicit) ;;
-	*) die "Input 'smtp-tls-mode' must be auto, starttls or implicit." ;;
-esac
-SMTP_STARTTLS_PORT="$(parse_uint smtp-starttls-port "${OMT_SMTP_STARTTLS_PORT:-${OCTOMAILTEST_SMTP_STARTTLS_PORT:-}}" '')"
-SMTPS_PORT="$(parse_uint smtps-port "${OMT_SMTPS_PORT:-${OCTOMAILTEST_SMTPS_PORT:-}}" '')"
-SIEVE_PORT="$(parse_uint sieve-port "${OMT_SIEVE_PORT:-${OCTOMAILTEST_SIEVE_PORT:-}}" '')"
+IMAP_PORT="$(parse_port imap-port "${OMT_IMAP_PORT:-}" "${OCTOMAILTEST_IMAP_PORT:-}")"
+IMAPS_PORT="$(parse_port imaps-port "${OMT_IMAPS_PORT:-}" "${OCTOMAILTEST_IMAPS_PORT:-}")"
+SMTP_RELAY_PORT="$(parse_port smtp-relay-port "${OMT_SMTP_RELAY_PORT:-}" "${OCTOMAILTEST_SMTP_RELAY_PORT:-}")"
+SMTP_PORT="$(parse_port smtp-port "${OMT_SMTP_PORT:-}" "${OCTOMAILTEST_SMTP_PORT:-}")"
+SMTPS_PORT="$(parse_port smtps-port "${OMT_SMTPS_PORT:-}" "${OCTOMAILTEST_SMTPS_PORT:-}")"
+SIEVE_PORT="$(parse_port sieve-port "${OMT_SIEVE_PORT:-}" "${OCTOMAILTEST_SIEVE_PORT:-}")"
 TIMEOUT="$(parse_uint timeout "${OMT_TIMEOUT:-}" 900)"
 RETENTION_DAYS="$(parse_uint retention-days "${OMT_RETENTION_DAYS:-}" '')"
 
@@ -142,6 +148,9 @@ fi
 HAS_CONFIG=false
 if [[ -n "$CONFIG_FILE" || -f ./.octomailtest ]]; then
 	HAS_CONFIG=true
+fi
+if [[ -z "$DOMAIN" && "$HAS_CONFIG" == false && "$EMAIL" == *@* ]]; then
+	DOMAIN="${EMAIL##*@}"
 fi
 
 # Secrets that only live in a config file must still be masked and scrubbed.
@@ -195,26 +204,23 @@ have swaks || warn "swaks is not installed: the SMTP AUTH and send-to-self tests
 [[ -n "$HOST" ]]       && export OCTOMAILTEST_HOST="$HOST"
 [[ -n "$EMAIL" ]]      && export OCTOMAILTEST_EMAIL="$EMAIL"
 [[ -n "$PASS" ]]       && export OCTOMAILTEST_PASS="$PASS"
-[[ -n "$IMAP_PORT" ]]  && export OCTOMAILTEST_IMAP_PORT="$IMAP_PORT"
-[[ -n "$SMTP_PORT" ]]  && export OCTOMAILTEST_SMTP_PORT="$SMTP_PORT"
-[[ -n "$SMTP_TLS_MODE" ]] && export OCTOMAILTEST_SMTP_TLS_MODE="$SMTP_TLS_MODE"
-if [[ -n "$SMTP_STARTTLS_PORT" ]]; then
-	export OCTOMAILTEST_SMTP_STARTTLS_PORT="$SMTP_STARTTLS_PORT"
-else
-	unset OCTOMAILTEST_SMTP_STARTTLS_PORT
-fi
-if [[ -n "$SMTPS_PORT" ]]; then
-	export OCTOMAILTEST_SMTPS_PORT="$SMTPS_PORT"
-else
-	unset OCTOMAILTEST_SMTPS_PORT
-fi
-[[ -n "$SIEVE_PORT" ]] && export OCTOMAILTEST_SIEVE_PORT="$SIEVE_PORT"
+export_port() {
+	if [[ -n "$2" ]]; then export "$1=$2"; else unset "$1"; fi
+}
+export_port OCTOMAILTEST_SMTP_RELAY_PORT "$SMTP_RELAY_PORT"
+export_port OCTOMAILTEST_SMTP_PORT "$SMTP_PORT"
+export_port OCTOMAILTEST_SMTPS_PORT "$SMTPS_PORT"
+export_port OCTOMAILTEST_IMAP_PORT "$IMAP_PORT"
+export_port OCTOMAILTEST_IMAPS_PORT "$IMAPS_PORT"
+export_port OCTOMAILTEST_SIEVE_PORT "$SIEVE_PORT"
 export OCTOMAILTEST_CI=1
 
 effective_port() {
-	# effective_port <input value> <script default>
+	# Unknown config-only values stay null instead of claiming a default was used.
 	if [[ -n "$1" ]]; then
 		printf '%s' "$1"
+	elif [[ "$HAS_CONFIG" == true ]]; then
+		printf null
 	else
 		printf '%s' "$2"
 	fi
@@ -231,58 +237,12 @@ describe_port() {
 	fi
 }
 
-IMAP_PORT_EFFECTIVE="$(effective_port "$IMAP_PORT" 993)"
+IMAP_PORT_EFFECTIVE="$(effective_port "$IMAP_PORT" 143)"
+IMAPS_PORT_EFFECTIVE="$(effective_port "$IMAPS_PORT" 993)"
+SMTP_RELAY_PORT_EFFECTIVE="$(effective_port "$SMTP_RELAY_PORT" 25)"
 SMTP_PORT_EFFECTIVE="$(effective_port "$SMTP_PORT" 587)"
+SMTPS_PORT_EFFECTIVE="$(effective_port "$SMTPS_PORT" 465)"
 SIEVE_PORT_EFFECTIVE="$(effective_port "$SIEVE_PORT" 4190)"
-
-# Match the engine's transport defaults without reading or overriding its config.
-# With a config file, omitted settings remain unknown until the engine reads it.
-SMTP_TLS_MODE_EFFECTIVE="${SMTP_TLS_MODE:-auto}"
-if [[ "$SMTP_TLS_MODE_EFFECTIVE" == auto ]]; then
-	if [[ "$SMTP_PORT_EFFECTIVE" == 465 ]]; then
-		SMTP_TLS_MODE_EFFECTIVE=implicit
-	else
-		SMTP_TLS_MODE_EFFECTIVE=starttls
-	fi
-fi
-SMTP_STARTTLS_PORT_DEFAULT=587
-SMTPS_PORT_DEFAULT=465
-if [[ "$SMTP_TLS_MODE_EFFECTIVE" == starttls ]]; then
-	SMTP_STARTTLS_PORT_DEFAULT="$SMTP_PORT_EFFECTIVE"
-else
-	SMTPS_PORT_DEFAULT="$SMTP_PORT_EFFECTIVE"
-fi
-SMTP_STARTTLS_PORT_EFFECTIVE="$(effective_port "$SMTP_STARTTLS_PORT" "$SMTP_STARTTLS_PORT_DEFAULT")"
-SMTPS_PORT_EFFECTIVE="$(effective_port "$SMTPS_PORT" "$SMTPS_PORT_DEFAULT")"
-SMTP_PORT_REPORTED="$SMTP_PORT_EFFECTIVE"
-SMTP_TLS_MODE_REPORTED="$SMTP_TLS_MODE_EFFECTIVE"
-SMTP_STARTTLS_PORT_REPORTED="$SMTP_STARTTLS_PORT_EFFECTIVE"
-SMTPS_PORT_REPORTED="$SMTPS_PORT_EFFECTIVE"
-if [[ "$HAS_CONFIG" == true ]]; then
-	[[ -n "$SMTP_PORT" ]] || SMTP_PORT_REPORTED=null
-	if [[ -z "$SMTP_TLS_MODE" || ( "$SMTP_TLS_MODE" == auto && -z "$SMTP_PORT" ) ]]; then
-		SMTP_TLS_MODE_REPORTED=''
-	fi
-	[[ -n "$SMTP_STARTTLS_PORT" ]] || SMTP_STARTTLS_PORT_REPORTED=null
-	[[ -n "$SMTPS_PORT" ]] || SMTPS_PORT_REPORTED=null
-fi
-
-describe_smtp_transport() {
-	case "$SMTP_TLS_MODE_REPORTED" in
-		implicit) printf 'implicit TLS (SMTPS)' ;;
-		starttls) printf 'STARTTLS' ;;
-		'') printf 'from config file (default: auto; implicit TLS on 465, STARTTLS otherwise)' ;;
-	esac
-}
-
-describe_smtp_test_port() {
-	# Config can affect both the override and the submission settings it derives from.
-	if [[ -z "$1" && "$HAS_CONFIG" == true ]]; then
-		printf 'from config file or derived from SMTP submission settings'
-	else
-		describe_port "$1" "$2"
-	fi
-}
 
 #############################################
 # Report files
@@ -314,11 +274,11 @@ fi
 	echo "# Domain:      ${DOMAIN:-(not set)}"
 	echo "# Host:        ${HOST:-(from config file)}"
 	echo "# Mailbox:     ${EMAIL:-(from config file)}"
-	echo "# IMAP port:   $(describe_port "$IMAP_PORT" 993)"
+	echo "# IMAP port:   $(describe_port "$IMAP_PORT" 143)"
+	echo "# IMAPS port:  $(describe_port "$IMAPS_PORT" 993)"
+	echo "# SMTP relay port:      $(describe_port "$SMTP_RELAY_PORT" 25)"
 	echo "# SMTP submission port: $(describe_port "$SMTP_PORT" 587)"
-	echo "# SMTP submission TLS:  $(describe_smtp_transport)"
-	echo "# SMTP STARTTLS port:   $(describe_smtp_test_port "$SMTP_STARTTLS_PORT" "$SMTP_STARTTLS_PORT_DEFAULT")"
-	echo "# SMTPS port:           $(describe_smtp_test_port "$SMTPS_PORT" "$SMTPS_PORT_DEFAULT")"
+	echo "# SMTPS port:           $(describe_port "$SMTPS_PORT" 465)"
 	echo "# Sieve port:  $(describe_port "$SIEVE_PORT" 4190)"
 	echo "# Config file: ${CONFIG_FILE:-(none)}"
 	echo "# Runner:      ${RUNNER_OS:-$(uname -s)} ${RUNNER_ARCH:-$(uname -m)}${RUNNER_NAME:+ (${RUNNER_NAME})}"
@@ -523,10 +483,10 @@ jq -n \
 	--arg host "$HOST" \
 	--arg email "$EMAIL" \
 	--argjson imap_port "$IMAP_PORT_EFFECTIVE" \
-	--argjson smtp_port "$SMTP_PORT_REPORTED" \
-	--arg smtp_tls_mode "$SMTP_TLS_MODE_REPORTED" \
-	--argjson smtp_starttls_port "$SMTP_STARTTLS_PORT_REPORTED" \
-	--argjson smtps_port "$SMTPS_PORT_REPORTED" \
+	--argjson imaps_port "$IMAPS_PORT_EFFECTIVE" \
+	--argjson smtp_relay_port "$SMTP_RELAY_PORT_EFFECTIVE" \
+	--argjson smtp_port "$SMTP_PORT_EFFECTIVE" \
+	--argjson smtps_port "$SMTPS_PORT_EFFECTIVE" \
 	--argjson sieve_port "$SIEVE_PORT_EFFECTIVE" \
 	--arg config_file "$CONFIG_FILE" \
 	--arg mail_status "$MAIL_STATUS" \
@@ -564,9 +524,9 @@ jq -n \
 			host: $host,
 			email: $email,
 			imap_port: $imap_port,
+			imaps_port: $imaps_port,
+			smtp_relay_port: $smtp_relay_port,
 			smtp_port: $smtp_port,
-			smtp_tls_mode: (if $smtp_tls_mode == "" then null else $smtp_tls_mode end),
-			smtp_starttls_port: $smtp_starttls_port,
 			smtps_port: $smtps_port,
 			sieve_port: $sieve_port,
 			config_file: (if $config_file == "" then null else $config_file end)
@@ -620,10 +580,11 @@ fi
 	echo "| Domain | ${DOMAIN:-_(not set)_} |"
 	echo "| Host | ${HOST:-_(from config file)_} |"
 	echo "| Mailbox | ${EMAIL:-_(from config file)_} |"
-	echo "| IMAPS port | $(describe_port "$IMAP_PORT" 993) |"
-	echo "| SMTP submission | $(describe_port "$SMTP_PORT" 587) / $(describe_smtp_transport) |"
-	echo "| SMTP STARTTLS port | $(describe_smtp_test_port "$SMTP_STARTTLS_PORT" "$SMTP_STARTTLS_PORT_DEFAULT") |"
-	echo "| SMTPS port | $(describe_smtp_test_port "$SMTPS_PORT" "$SMTPS_PORT_DEFAULT") |"
+	echo "| IMAP port | $(describe_port "$IMAP_PORT" 143) |"
+	echo "| IMAPS port | $(describe_port "$IMAPS_PORT" 993) |"
+	echo "| SMTP relay port | $(describe_port "$SMTP_RELAY_PORT" 25) |"
+	echo "| SMTP submission port | $(describe_port "$SMTP_PORT" 587) |"
+	echo "| SMTPS port | $(describe_port "$SMTPS_PORT" 465) |"
 	echo "| Sieve port | $(describe_port "$SIEVE_PORT" 4190) |"
 	echo "| Mode | \`${MODE}\` |"
 	echo "| Started | ${STARTED_AT} |"

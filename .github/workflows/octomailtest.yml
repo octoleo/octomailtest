@@ -35,7 +35,7 @@ on:
         options: [both, mail, imap]
         default: both
       domain:
-        description: 'Mail domain for the DNS checks (default: OCTOMAILTEST_DOMAIN secret)'
+        description: 'Optional DNS domain override (default: mailbox domain, or OCTOMAILTEST_DOMAIN secret)'
         type: string
         default: ''
       host:
@@ -47,27 +47,27 @@ on:
         type: string
         default: ''
       imap-port:
-        description: 'IMAPS port using implicit TLS (0 = 993)'
+        description: 'IMAP port override (0 = environment/config, then 143)'
+        type: number
+        default: 0
+      imaps-port:
+        description: 'IMAPS port override (0 = environment/config, then 993)'
+        type: number
+        default: 0
+      smtp-relay-port:
+        description: 'SMTP relay port override (0 = environment/config, then 25)'
         type: number
         default: 0
       smtp-port:
-        description: 'SMTP submission port; transport follows smtp-tls-mode (0 = 587)'
-        type: number
-        default: 0
-      smtp-tls-mode:
-        description: 'Submission transport: auto, starttls or implicit (empty = environment/config, then auto)'
-        type: string
-        default: ''
-      smtp-starttls-port:
-        description: 'Dedicated STARTTLS port (0 = submission port in STARTTLS mode, otherwise 587)'
+        description: 'SMTP submission port override (0 = environment/config, then 587); TLS is detected'
         type: number
         default: 0
       smtps-port:
-        description: 'Dedicated SMTPS port (0 = submission port in implicit mode, otherwise 465)'
+        description: 'SMTPS submission port override (0 = environment/config, then 465); TLS is detected'
         type: number
         default: 0
       sieve-port:
-        description: 'ManageSieve port (0 = 4190)'
+        description: 'ManageSieve port override (0 = environment/config, then 4190)'
         type: number
         default: 0
       private:
@@ -110,7 +110,7 @@ on:
         type: string
         default: both
       domain:
-        description: 'Mail domain for the DNS checks (falls back to the OCTOMAILTEST_DOMAIN secret)'
+        description: 'Optional DNS domain override (default: mailbox domain, or OCTOMAILTEST_DOMAIN secret)'
         type: string
         default: ''
       host:
@@ -122,27 +122,27 @@ on:
         type: string
         default: ''
       imap-port:
-        description: 'IMAPS port using implicit TLS (0 = 993)'
+        description: 'IMAP port override (0 = environment/config, then 143)'
+        type: number
+        default: 0
+      imaps-port:
+        description: 'IMAPS port override (0 = environment/config, then 993)'
+        type: number
+        default: 0
+      smtp-relay-port:
+        description: 'SMTP relay port override (0 = environment/config, then 25)'
         type: number
         default: 0
       smtp-port:
-        description: 'SMTP submission port; transport follows smtp-tls-mode (0 = 587)'
-        type: number
-        default: 0
-      smtp-tls-mode:
-        description: 'Submission transport: auto, starttls or implicit (empty = environment/config, then auto)'
-        type: string
-        default: ''
-      smtp-starttls-port:
-        description: 'Dedicated STARTTLS port (0 = submission port in STARTTLS mode, otherwise 587)'
+        description: 'SMTP submission port override (0 = environment/config, then 587); TLS is detected'
         type: number
         default: 0
       smtps-port:
-        description: 'Dedicated SMTPS port (0 = submission port in implicit mode, otherwise 465)'
+        description: 'SMTPS submission port override (0 = environment/config, then 465); TLS is detected'
         type: number
         default: 0
       sieve-port:
-        description: 'ManageSieve port (0 = 4190)'
+        description: 'ManageSieve port override (0 = environment/config, then 4190)'
         type: number
         default: 0
       private:
@@ -270,9 +270,9 @@ jobs:
           pass: ${{ secrets.OCTOMAILTEST_PASS }}
           mode: ${{ inputs.mode }}
           imap-port: ${{ inputs.imap-port }}
+          imaps-port: ${{ inputs.imaps-port }}
+          smtp-relay-port: ${{ inputs.smtp-relay-port }}
           smtp-port: ${{ inputs.smtp-port }}
-          smtp-tls-mode: ${{ inputs.smtp-tls-mode }}
-          smtp-starttls-port: ${{ inputs.smtp-starttls-port }}
           smtps-port: ${{ inputs.smtps-port }}
           sieve-port: ${{ inputs.sieve-port }}
           private: ${{ inputs.private }}

@@ -8,8 +8,7 @@
 #
 #   - uses: octoleo/octomailtest@master
 #     with:
-#       domain: example.com
-#       host: mx1.example.com
+#       host: ${{ secrets.OCTOMAILTEST_HOST }}
 #       email: ${{ secrets.OCTOMAILTEST_EMAIL }}
 #       pass: ${{ secrets.OCTOMAILTEST_PASS }}
 #
@@ -30,7 +29,7 @@ inputs:
   domain:
     description: >-
       Mail domain for the DNS checks (MX, SPF, DKIM, DMARC, BIMI, MTA-STS, TLS-RPT).
-      Same as OCTOMAILTEST_DOMAIN. Optional, but the DNS checks are skipped without it.
+      Same as OCTOMAILTEST_DOMAIN. Optional; defaults to the domain of the mailbox address.
     required: false
     default: ''
   host:
@@ -53,27 +52,27 @@ inputs:
     required: false
     default: ''
   imap-port:
-    description: 'IMAPS port. Same as OCTOMAILTEST_IMAP_PORT. Empty or 0 means 993.'
+    description: 'IMAP port. Same as OCTOMAILTEST_IMAP_PORT. Empty or 0 preserves environment/config settings, defaulting to 143.'
+    required: false
+    default: ''
+  imaps-port:
+    description: 'IMAPS port. Same as OCTOMAILTEST_IMAPS_PORT. Empty or 0 preserves environment/config settings, defaulting to 993.'
+    required: false
+    default: ''
+  smtp-relay-port:
+    description: 'SMTP relay port. Same as OCTOMAILTEST_SMTP_RELAY_PORT. Empty or 0 preserves environment/config settings, defaulting to 25.'
     required: false
     default: ''
   smtp-port:
-    description: 'SMTP submission port for authentication and delivery; transport is selected by smtp-tls-mode. Same as OCTOMAILTEST_SMTP_PORT. Empty or 0 means 587.'
-    required: false
-    default: ''
-  smtp-tls-mode:
-    description: 'Submission transport: auto uses implicit TLS on port 465 and STARTTLS otherwise; starttls or implicit selects it explicitly. Empty preserves environment/config settings, defaulting to auto. Same as OCTOMAILTEST_SMTP_TLS_MODE.'
-    required: false
-    default: ''
-  smtp-starttls-port:
-    description: 'Port for dedicated SMTP STARTTLS checks. Same as OCTOMAILTEST_SMTP_STARTTLS_PORT. Empty or 0 uses the submission port in STARTTLS mode, otherwise 587.'
+    description: 'SMTP submission port. TLS is detected automatically. Same as OCTOMAILTEST_SMTP_PORT. Empty or 0 preserves environment/config settings, defaulting to 587.'
     required: false
     default: ''
   smtps-port:
-    description: 'Port for dedicated implicit-TLS SMTP checks. Same as OCTOMAILTEST_SMTPS_PORT. Empty or 0 uses the submission port in implicit mode, otherwise 465.'
+    description: 'SMTPS submission port. TLS is detected automatically. Same as OCTOMAILTEST_SMTPS_PORT. Empty or 0 preserves environment/config settings, defaulting to 465.'
     required: false
     default: ''
   sieve-port:
-    description: 'ManageSieve port. Same as OCTOMAILTEST_SIEVE_PORT. Empty or 0 means 4190.'
+    description: 'ManageSieve port. Same as OCTOMAILTEST_SIEVE_PORT. Empty or 0 preserves environment/config settings, defaulting to 4190.'
     required: false
     default: ''
   mode:
@@ -82,8 +81,8 @@ inputs:
     default: 'both'
   config-file:
     description: >-
-      Path, relative to the workspace, of an .octomailtest file holding DOMAIN, HOST, EMAIL, PASS
-      and the port values. An alternative to the individual inputs.
+      Path, relative to the workspace, of an .octomailtest file holding HOST, EMAIL, PASS
+      and optional DOMAIN/port overrides. An alternative to the individual inputs.
     required: false
     default: ''
   private:
@@ -242,9 +241,9 @@ runs:
         OMT_EMAIL: ${{ inputs.email }}
         OMT_PASS: ${{ inputs.pass }}
         OMT_IMAP_PORT: ${{ inputs.imap-port }}
+        OMT_IMAPS_PORT: ${{ inputs.imaps-port }}
+        OMT_SMTP_RELAY_PORT: ${{ inputs.smtp-relay-port }}
         OMT_SMTP_PORT: ${{ inputs.smtp-port }}
-        OMT_SMTP_TLS_MODE: ${{ inputs.smtp-tls-mode }}
-        OMT_SMTP_STARTTLS_PORT: ${{ inputs.smtp-starttls-port }}
         OMT_SMTPS_PORT: ${{ inputs.smtps-port }}
         OMT_SIEVE_PORT: ${{ inputs.sieve-port }}
         OMT_MODE: ${{ inputs.mode }}

@@ -104,7 +104,7 @@ omt_cli_execute() (
 				else args+=("$1"); shift; fi
 				;;
 			--help) help=true; args+=("$1"); shift ;;
-			-d|--domain|-h|--host|-e|--email|-p|--pass|-c|--config|--imap-port|--smtp-port|--smtp-tls-mode|--smtp-starttls-port|--smtps-port|--sieve-port)
+			-d|--domain|-h|--host|-e|--email|-p|--pass|-c|--config|--imap-port|--imaps-port|--smtp-port|--smtp-relay-port|--smtps-port|--sieve-port)
 				args+=("$1")
 				shift
 				if (( $# )); then args+=("$1"); shift; fi
