@@ -424,7 +424,8 @@ use the composite action directly, as shown in
 
 In this repository the workflow also runs on every pull request and push to
 `master` (using the repository's `OCTOMAILTEST_*` secrets) and can be
-started manually from the **Actions** tab.
+started manually from the **Actions** tab. Push and pull-request runs always
+enable private output, including port redaction.
 
 ### Inputs
 

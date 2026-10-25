@@ -275,7 +275,7 @@ jobs:
           smtp-port: ${{ inputs.smtp-port }}
           smtps-port: ${{ inputs.smtps-port }}
           sieve-port: ${{ inputs.sieve-port }}
-          private: ${{ inputs.private }}
+          private: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || inputs.private }}
           alias: ${{ inputs.alias }}
           quiet: ${{ inputs.quiet }}
           timeout: ${{ inputs.timeout }}
