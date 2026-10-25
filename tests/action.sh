@@ -17,16 +17,18 @@ cat > "$TEMP/action/src/mail" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'SMTP connectivity on %s:587\n' "$OCTOMAILTEST_HOST"
-if [[ -n "${MOCK_SMTP_SETTINGS_FILE:-}" ]]; then
-	printf '%s\n' "${OCTOMAILTEST_SMTP_PORT:-unset}" "${OCTOMAILTEST_SMTP_TLS_MODE:-unset}" \
-		"${OCTOMAILTEST_SMTP_STARTTLS_PORT:-unset}" "${OCTOMAILTEST_SMTPS_PORT:-unset}" \
-		> "$MOCK_SMTP_SETTINGS_FILE"
+if [[ -n "${MOCK_PORT_SETTINGS_FILE:-}" ]]; then
+	printf '%s\n' "${OCTOMAILTEST_SMTP_RELAY_PORT:-unset}" "${OCTOMAILTEST_SMTP_PORT:-unset}" \
+		"${OCTOMAILTEST_SMTPS_PORT:-unset}" "${OCTOMAILTEST_IMAP_PORT:-unset}" \
+		"${OCTOMAILTEST_IMAPS_PORT:-unset}" "${OCTOMAILTEST_SIEVE_PORT:-unset}" \
+		> "$MOCK_PORT_SETTINGS_FILE"
 fi
+[[ -z "${MOCK_DOMAIN_FILE:-}" ]] || printf '%s\n' "${OCTOMAILTEST_DOMAIN:-unset}" > "$MOCK_DOMAIN_FILE"
 if [[ "$MOCK_SCENARIO" == stream ]]; then
 	IFS= read -r -t 15 release < "$MOCK_RELEASE_FIFO"
 	[[ "$release" == continue ]]
 fi
-printf 'Mail domain %s; mailbox %s\n' "$OCTOMAILTEST_DOMAIN" "$OCTOMAILTEST_EMAIL"
+printf 'Mail domain %s; mailbox %s\n' "${OCTOMAILTEST_DOMAIN:-unset}" "$OCTOMAILTEST_EMAIL"
 printf 'Resolved IP: 198.51.100.27; PTR: other.example.net\n'
 printf 'TLS protocol: TLSv1.3; cipher: TLS_AES_256_GCM_SHA384\n'
 printf 'Certificate expires in 72 days\n'
@@ -127,7 +129,7 @@ jq -e '.total_runs == 1' .octomailtest-history-repository/octomailtest-history/B
 	while (( SECONDS < deadline )); do
 		IFS= read -r -t "$((deadline - SECONDS))" line <&9 || break
 		printf '%s\n' "$line" >> "$TEMP/live.log"
-		if [[ "$line" == 'SMTP connectivity on [Bingo host]:587' ]]; then
+		if [[ "$line" == 'SMTP connectivity on [Bingo host]:[Bingo port]' ]]; then
 			live_result=true
 			break
 		fi
@@ -147,7 +149,7 @@ jq -e '.total_runs == 1' .octomailtest-history-repository/octomailtest-history/B
 )
 grep -q 'SMTP authentication: PASS' "$TEMP/live.log"
 grep -q 'Detailed IMAP test completed' "$TEMP/live.log"
-grep -q 'SMTP connectivity on \[Bingo host\]:587' live-report/report.txt
+grep -qF 'SMTP connectivity on [Bingo host]:[Bingo port]' live-report/report.txt
 grep -q 'SMTP authentication: PASS' live-report/report.txt
 jq -e '.status == "passed" and .exit_code == 0' live-report/report.json >/dev/null
 jq -e '.total_runs == 1 and .passed_runs == 1' live-history/Bingo/history.json >/dev/null
@@ -156,91 +158,121 @@ if grep -RE 'private\.example|other\.example\.net|198\.51\.100\.27|mock-password
 	exit 1
 fi
 
-# The action forwards transport configuration to both diagnostics while reports
-# distinguish the submission connection from the dedicated protocol checks.
-# Each call deliberately starts with the caller's environment, not prior cases.
+# Only host, email and password are needed; ports are optional overrides.
+# Each fixture intentionally confines its exported values to its own subshell.
 # shellcheck disable=SC2030,SC2031
-check_smtp_settings() (
-	local label="$1" port="$2" mode="$3" starttls_port="$4" smtps_port="$5"
-	local expected_mode="$6" expected_starttls="$7" expected_smtps="$8"
-	local expected_port="$port" expected_export_mode
-	unset OCTOMAILTEST_SMTP_PORT OCTOMAILTEST_SMTP_TLS_MODE OCTOMAILTEST_SMTP_STARTTLS_PORT OCTOMAILTEST_SMTPS_PORT
-	export OMT_SMTP_PORT="$port" OMT_SMTP_TLS_MODE="$mode"
-	export OMT_SMTP_STARTTLS_PORT="$starttls_port" OMT_SMTPS_PORT="$smtps_port"
-	export OMT_HISTORY=false OMT_REPORT_DIR="smtp-$label" MOCK_SCENARIO=pass
-	export GITHUB_OUTPUT="$TEMP/smtp-$label.outputs" MOCK_SMTP_SETTINGS_FILE="$TEMP/smtp-$label.settings"
-	bash "$TEMP/action/action/execute.sh" > "$TEMP/smtp-$label.log" 2>&1
-	[[ -n "$expected_port" && "$expected_port" != 0 ]] || expected_port=587
-	expected_export_mode="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
-	{
-		for value in "$port" "$expected_export_mode" "$starttls_port" "$smtps_port"; do
-			if [[ -z "$value" || "$value" == 0 ]]; then printf 'unset\n'; else printf '%s\n' "$value"; fi
-		done
-	} > "$TEMP/smtp-$label.expected"
-	cmp "$TEMP/smtp-$label.expected" "$MOCK_SMTP_SETTINGS_FILE"
-	jq -e --argjson port "$expected_port" --arg mode "$expected_mode" \
-		--argjson starttls "$expected_starttls" --argjson smtps "$expected_smtps" \
-		'.status == "passed" and .target.smtp_port == $port and .target.smtp_tls_mode == $mode
-		 and .target.smtp_starttls_port == $starttls and .target.smtps_port == $smtps' \
-		"smtp-$label/report.json" >/dev/null
-	grep -q 'SMTP submission TLS:' "smtp-$label/report.txt"
-	grep -q 'SMTP STARTTLS port' "smtp-$label/summary.md"
-	grep -q 'SMTPS port' "smtp-$label/summary.md"
-	if grep -RE 'private\.example|other\.example\.net|198\.51\.100\.27|mock-password' "smtp-$label" "$TEMP/smtp-$label.log"; then
-		echo 'FAIL: SMTP transport reporting exposed an identifier.' >&2
-		exit 1
+check_port_settings() (
+	local label="$1" field value index=0
+	shift
+	local ports=("$@") defaults=(25 587 465 143 993 4190) expected=()
+	local fields=(SMTP_RELAY_PORT SMTP_PORT SMTPS_PORT IMAP_PORT IMAPS_PORT SIEVE_PORT)
+	unset OCTOMAILTEST_DOMAIN
+	export OMT_DOMAIN='' OMT_HISTORY=false OMT_PRIVATE=false OMT_REPORT_DIR="ports-$label" MOCK_SCENARIO=pass
+	export GITHUB_OUTPUT="$TEMP/ports-$label.outputs" MOCK_PORT_SETTINGS_FILE="$TEMP/ports-$label.settings"
+	export MOCK_DOMAIN_FILE="$TEMP/ports-$label.domain"
+	: > "$TEMP/ports-$label.expected"
+	for field in "${fields[@]}"; do
+		unset "OCTOMAILTEST_$field"
+		value="${ports[$index]}"
+		export "OMT_$field=$value"
+		if [[ -z "$value" || "$value" == 0 ]]; then
+			printf 'unset\n' >> "$TEMP/ports-$label.expected"
+			expected+=("${defaults[$index]}")
+		else
+			printf '%s\n' "$value" >> "$TEMP/ports-$label.expected"
+			expected+=("$value")
+		fi
+		index=$((index + 1))
+	done
+	bash "$TEMP/action/action/execute.sh" > "$TEMP/ports-$label.log" 2>&1
+	cmp "$TEMP/ports-$label.expected" "$MOCK_PORT_SETTINGS_FILE"
+	[[ "$(cat "$MOCK_DOMAIN_FILE")" == private.example ]]
+	jq -e --argjson relay "${expected[0]}" --argjson smtp "${expected[1]}" --argjson smtps "${expected[2]}" \
+		--argjson imap "${expected[3]}" --argjson imaps "${expected[4]}" --argjson sieve "${expected[5]}" \
+		'.status == "passed" and .target.domain == "private.example"
+		 and .target.smtp_relay_port == $relay and .target.smtp_port == $smtp and .target.smtps_port == $smtps
+		 and .target.imap_port == $imap and .target.imaps_port == $imaps and .target.sieve_port == $sieve' \
+		"ports-$label/report.json" >/dev/null
+	for role in 'SMTP relay port' 'SMTP submission port' 'SMTPS port' 'IMAP port' 'IMAPS port' 'Sieve port'; do
+		grep -q "$role" "ports-$label/report.txt"
+		grep -q "$role" "ports-$label/summary.md"
+	done
+	if [[ "$label" == custom ]]; then
+		# Privacy changes published reports, never the ports sent to diagnostics.
+		export OMT_PRIVATE=true OMT_REPORT_DIR=ports-private
+		bash "$TEMP/action/action/execute.sh" > "$TEMP/ports-private.log" 2>&1
+		cmp "$TEMP/ports-$label.expected" "$MOCK_PORT_SETTINGS_FILE"
+		jq -e '.target.smtp_relay_port == "[Bingo SMTP relay port]"
+			and .target.smtp_port == "[Bingo SMTP port]" and .target.smtps_port == "[Bingo SMTPS port]"
+			and .target.imap_port == "[Bingo IMAP port]" and .target.imaps_port == "[Bingo IMAPS port]"
+			and .target.sieve_port == "[Bingo Sieve port]"' ports-private/report.json >/dev/null
+		if grep -RE 'private\.example|other\.example\.net|198\.51\.100\.27|mock-password|25250|25870|24650|21143|21993|24190' ports-private "$TEMP/ports-private.log"; then
+			echo 'FAIL: private action exposed identifying values or configured ports.' >&2; exit 1
+		fi
 	fi
 )
-check_smtp_settings defaults '' '' '' '' starttls 587 465
-check_smtp_settings auto-smtps 465 auto 0 0 implicit 587 465
-check_smtp_settings implicit-custom 2465 IMPLICIT 2587 2466 implicit 2587 2466
-check_smtp_settings starttls-custom 2587 starttls 0 0 starttls 2587 465
+check_port_settings defaults '' '' '' '' '' ''
+check_port_settings zero-defaults 0 0 0 0 0 0
+check_port_settings custom 25250 25870 24650 21143 21993 24190
 
-# Unset action inputs retain the environment fallback and config-file precedence.
-# This fixture's exports must not affect the following configuration fixture.
+# Input omission/zero preserves environment settings; nonzero inputs override them.
 # shellcheck disable=SC2030,SC2031
 (
-	export OMT_SMTP_PORT='' OMT_SMTP_TLS_MODE='' OMT_SMTP_STARTTLS_PORT='' OMT_SMTPS_PORT=''
-	export OCTOMAILTEST_SMTP_PORT=2465 OCTOMAILTEST_SMTP_TLS_MODE=implicit
-	export OCTOMAILTEST_SMTP_STARTTLS_PORT=2587 OCTOMAILTEST_SMTPS_PORT=3465
-	export OMT_HISTORY=false OMT_REPORT_DIR=smtp-environment MOCK_SCENARIO=pass
-	export GITHUB_OUTPUT="$TEMP/smtp-environment.outputs" MOCK_SMTP_SETTINGS_FILE="$TEMP/smtp-environment.settings"
-	bash "$TEMP/action/action/execute.sh" > "$TEMP/smtp-environment.log" 2>&1
-	printf '2465\nimplicit\n2587\n3465\n' > "$TEMP/smtp-environment.expected"
-	cmp "$TEMP/smtp-environment.expected" "$MOCK_SMTP_SETTINGS_FILE"
-	jq -e '.target.smtp_port == 2465 and .target.smtp_tls_mode == "implicit"
-		and .target.smtp_starttls_port == 2587 and .target.smtps_port == 3465' smtp-environment/report.json >/dev/null
-	# Explicit inputs win, and 0 removes an inherited dedicated-port override.
-	export OMT_SMTP_PORT=465 OMT_SMTP_TLS_MODE=auto OMT_SMTP_STARTTLS_PORT=0 OMT_SMTPS_PORT=0
-	export OMT_REPORT_DIR=smtp-inputs
-	bash "$TEMP/action/action/execute.sh" > "$TEMP/smtp-inputs.log" 2>&1
-	printf '465\nauto\nunset\nunset\n' > "$TEMP/smtp-inputs.expected"
-	cmp "$TEMP/smtp-inputs.expected" "$MOCK_SMTP_SETTINGS_FILE"
-	jq -e '.target.smtp_port == 465 and .target.smtp_tls_mode == "implicit"
-		and .target.smtp_starttls_port == 587 and .target.smtps_port == 465' smtp-inputs/report.json >/dev/null
+	export OMT_SMTP_RELAY_PORT=0 OMT_SMTP_PORT='' OMT_SMTPS_PORT=0 OMT_IMAP_PORT='' OMT_IMAPS_PORT=0 OMT_SIEVE_PORT=''
+	export OCTOMAILTEST_SMTP_RELAY_PORT=25250 OCTOMAILTEST_SMTP_PORT=25870 OCTOMAILTEST_SMTPS_PORT=24650
+	export OCTOMAILTEST_IMAP_PORT=21143 OCTOMAILTEST_IMAPS_PORT=21993 OCTOMAILTEST_SIEVE_PORT=24190
+	export OMT_HISTORY=false OMT_PRIVATE=false OMT_REPORT_DIR=ports-environment MOCK_SCENARIO=pass
+	export GITHUB_OUTPUT="$TEMP/ports-environment.outputs" MOCK_PORT_SETTINGS_FILE="$TEMP/ports-environment.settings"
+	bash "$TEMP/action/action/execute.sh" > "$TEMP/ports-environment.log" 2>&1
+	printf '25250\n25870\n24650\n21143\n21993\n24190\n' > "$TEMP/ports-environment.expected"
+	cmp "$TEMP/ports-environment.expected" "$MOCK_PORT_SETTINGS_FILE"
+	export OMT_SMTP_PORT=35870 OMT_IMAPS_PORT=31993 OMT_REPORT_DIR=ports-inputs
+	bash "$TEMP/action/action/execute.sh" > "$TEMP/ports-inputs.log" 2>&1
+	printf '25250\n35870\n24650\n21143\n31993\n24190\n' > "$TEMP/ports-inputs.expected"
+	cmp "$TEMP/ports-inputs.expected" "$MOCK_PORT_SETTINGS_FILE"
 )
-# Config settings are isolated from the previous environment-based fixture.
+
+# Config-only values remain the engine's responsibility and are not overwritten.
 # shellcheck disable=SC2030,SC2031
 (
-	unset OCTOMAILTEST_SMTP_PORT OCTOMAILTEST_SMTP_TLS_MODE OCTOMAILTEST_SMTP_STARTTLS_PORT OCTOMAILTEST_SMTPS_PORT
-	export OMT_SMTP_PORT='' OMT_SMTP_TLS_MODE='' OMT_SMTP_STARTTLS_PORT='' OMT_SMTPS_PORT=''
-	printf 'SMTP_PORT=2465\nSMTP_TLS_MODE=implicit\nSMTP_STARTTLS_PORT=2587\nSMTPS_PORT=3465\n' > "$TEMP/smtp-config"
-	export OMT_CONFIG_FILE="$TEMP/smtp-config" OMT_HISTORY=false OMT_REPORT_DIR=smtp-config MOCK_SCENARIO=pass
-	export GITHUB_OUTPUT="$TEMP/smtp-config.outputs" MOCK_SMTP_SETTINGS_FILE="$TEMP/smtp-config.settings"
-	bash "$TEMP/action/action/execute.sh" > "$TEMP/smtp-config.log" 2>&1
-	printf 'unset\nunset\nunset\nunset\n' > "$TEMP/smtp-config.expected"
-	cmp "$TEMP/smtp-config.expected" "$MOCK_SMTP_SETTINGS_FILE"
-	jq -e '.target.smtp_port == null and .target.smtp_tls_mode == null
-		and .target.smtp_starttls_port == null and .target.smtps_port == null' smtp-config/report.json >/dev/null
-	grep -q 'from config file' smtp-config/summary.md
+	for field in SMTP_RELAY_PORT SMTP_PORT SMTPS_PORT IMAP_PORT IMAPS_PORT SIEVE_PORT; do
+		unset "OCTOMAILTEST_$field"
+		export "OMT_$field="
+	done
+	printf 'SMTP_RELAY_PORT=25250\nSMTP_PORT=25870\nSMTPS_PORT=24650\nIMAP_PORT=21143\nIMAPS_PORT=21993\nSIEVE_PORT=24190\n' > "$TEMP/ports-config"
+	export OMT_CONFIG_FILE="$TEMP/ports-config" OMT_HISTORY=false OMT_PRIVATE=false OMT_REPORT_DIR=ports-config MOCK_SCENARIO=pass
+	export GITHUB_OUTPUT="$TEMP/ports-config.outputs" MOCK_PORT_SETTINGS_FILE="$TEMP/ports-config.settings"
+	bash "$TEMP/action/action/execute.sh" > "$TEMP/ports-config.log" 2>&1
+	printf 'unset\nunset\nunset\nunset\nunset\nunset\n' > "$TEMP/ports-config.expected"
+	cmp "$TEMP/ports-config.expected" "$MOCK_PORT_SETTINGS_FILE"
+	jq -e '.target.smtp_relay_port == null and .target.smtp_port == null and .target.smtps_port == null
+		and .target.imap_port == null and .target.imaps_port == null and .target.sieve_port == null' ports-config/report.json >/dev/null
+	grep -q 'config file' ports-config/summary.md
 )
-# Invalid configuration is confined to its own fixture environment.
+
+# Domain overrides remain optional; each of the three connection inputs is required.
 # shellcheck disable=SC2030,SC2031
 (
-	export OMT_SMTP_TLS_MODE=unsupported OMT_HISTORY=false OMT_REPORT_DIR=smtp-invalid
-	export GITHUB_OUTPUT="$TEMP/smtp-invalid.outputs"
-	bash "$TEMP/action/action/execute.sh" > "$TEMP/smtp-invalid.log" 2>&1
-	jq -e '.status == "failed" and .exit_code != 0' smtp-invalid/report.json >/dev/null
-	grep -q "Input 'smtp-tls-mode' must be auto, starttls or implicit" "$TEMP/smtp-invalid.log"
+	export OMT_DOMAIN=override.example OMT_HISTORY=false OMT_REPORT_DIR=domain-override MOCK_SCENARIO=pass
+	export GITHUB_OUTPUT="$TEMP/domain-override.outputs" MOCK_DOMAIN_FILE="$TEMP/domain-override.value"
+	bash "$TEMP/action/action/execute.sh" > "$TEMP/domain-override.log" 2>&1
+	[[ "$(cat "$MOCK_DOMAIN_FILE")" == override.example ]]
+	for missing in HOST EMAIL PASS; do
+		(
+			unset "OCTOMAILTEST_$missing"
+			export "OMT_$missing=" OMT_REPORT_DIR="missing-$missing"
+			bash "$TEMP/action/action/execute.sh" > "$TEMP/missing-$missing.log" 2>&1
+			jq -e '.status == "failed" and .exit_code != 0' "missing-$missing/report.json" >/dev/null
+		)
+	done
 )
-echo 'PASS: action privacy, outcomes, history, report paths, SMTP transport forwarding and reporting'
+# Invalid port input remains a failed run rather than silently using a default.
+# shellcheck disable=SC2030,SC2031
+(
+	export OMT_SMTPS_PORT=invalid OMT_HISTORY=false OMT_REPORT_DIR=ports-invalid
+	export GITHUB_OUTPUT="$TEMP/ports-invalid.outputs"
+	bash "$TEMP/action/action/execute.sh" > "$TEMP/ports-invalid.log" 2>&1
+	jq -e '.status == "failed" and .exit_code != 0' ports-invalid/report.json >/dev/null
+	grep -q "Input 'smtps-port' must be a whole number" "$TEMP/ports-invalid.log"
+)
+echo 'PASS: action privacy, outcomes, history, optional port forwarding and three-input setup'

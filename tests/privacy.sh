@@ -39,7 +39,7 @@ export OMT_PRIVACY_CONFIG_EMAIL=admin@other.example OMT_PRIVACY_CONFIG_PASS='con
 	exec 9< "$TEMP/live-output"
 	printf 'SMTP connectivity on %s:587\n' "$HOST" >&8
 	IFS= read -r -t 5 first <&9 || fail 'private output did not arrive while diagnostic input remained open'
-	[[ "$first" == 'SMTP connectivity on [Bingo host]:587' ]] || fail 'first live result was not anonymized'
+	[[ "$first" == 'SMTP connectivity on [Bingo host]:[Bingo port]' ]] || fail 'first live result was not anonymized'
 	printf 'SMTP authentication for %s: PASS; password %s\n' "$EMAIL" "$PASS" >&8
 	IFS= read -r -t 5 second <&9 || fail 'subsequent private output was buffered'
 	[[ "$second" == 'SMTP authentication for [Bingo email]: PASS; password [Bingo redacted]' ]] || fail 'second live result lost privacy or detail'
@@ -74,10 +74,49 @@ for private in "$DOMAIN" "$HOST" "$EMAIL" "$PASS" "$PASS64" "$EMAIL64" "$AUTH64"
 	192.0.2.4 'Private Company' 'Certificate Organization' MIIBVeryLongPublicKey UniqueCertificateBody 'Customer Contract Inbox'; do
 	excludes "$TEMP/output" "$private"
 done
-for retained in '[Bingo domain]' '[Bingo host]' '[Bingo email]' 'Port 587: ✅ open' 'Protocol: TLSv1.3' \
+for retained in '[Bingo domain]' '[Bingo host]' '[Bingo email]' 'Port [Bingo port]: ✅ open' 'Protocol: TLSv1.3' \
 	TLS_AES_256_GCM_SHA384 'Days until expiration: 365' 'notAfter=Oct 24 10:20:30 2027 GMT' \
 	'⚠️ PTR differs from hostname' '❌ IMAP authentication failed' 'report.txt report.json summary.md' 'k=rsa' 't=s'; do
 	contains "$TEMP/output" "$retained"
+done
+
+# Both standard and custom ports stay private without changing unrelated numbers.
+cat <<'EOF' | omt_privacy_filter Bingo "$DOMAIN" "$HOST" "$EMAIL" "$PASS" > "$TEMP/ports"
+SMTP relay port 25: open
+SMTP port: 587: authenticated
+SMTPS on 465: TLS ready
+IMAP 143: STARTTLS ready
+IMAPS on 993: authenticated
+Sieve port 4190: capabilities returned
+STARTTLS on 25870
+SMTP implicit TLS on 24650
+IMAP port: from config file (default: 21143)
+| IMAPS port | 21993 |
+OCTOMAILTEST_SIEVE_PORT=24190
+Ports: 25250, 25870 / 24650
+=== Trying mx.customer.example:25870...
+Connection to mx.customer.example (198.51.100.42) 24650 port [tcp/submissions] succeeded!
+Connected to [2001:db8::42]:21993
+connect:errno=111
+Started: 2026-10-25T14:25:00Z
+Completed: 2026-10-25T14:25:25Z
+notAfter=Oct 25 14:25:00 2027 GMT
+Protocol: TLSv1.3
+Total runs: 25; passed: 143; failed: 587
+Messages: 993; folders: 465
+EOF
+for port in 25250 25870 24650 21143 21993 24190; do excludes "$TEMP/ports" "$port"; done
+for value in 'SMTP relay port [Bingo port]: open' 'SMTP port: [Bingo port]: authenticated' \
+	'SMTPS on [Bingo port]: TLS ready' 'IMAP [Bingo port]: STARTTLS ready' \
+	'IMAPS on [Bingo port]: authenticated' 'Sieve port [Bingo port]: capabilities returned' \
+	'STARTTLS on [Bingo port]' 'SMTP implicit TLS on [Bingo port]' \
+	'IMAP port: from config file (default: [Bingo port])' '| IMAPS port | [Bingo port] |' \
+	'OCTOMAILTEST_SIEVE_PORT=[Bingo port]' 'Ports: [Bingo port], [Bingo port] / [Bingo port]' \
+	'[Bingo host]:[Bingo port]' '[Bingo IP]]:[Bingo port]' 'connect:errno=111' \
+	'Started: 2026-10-25T14:25:00Z' 'Completed: 2026-10-25T14:25:25Z' \
+	'notAfter=Oct 25 14:25:00 2027 GMT' 'Protocol: TLSv1.3' \
+	'Total runs: 25; passed: 143; failed: 587' 'Messages: 993; folders: 465'; do
+	contains "$TEMP/ports" "$value"
 done
 
 # Identical discovered identifiers keep the same labels, even across lines.
@@ -132,6 +171,10 @@ printf 'LISTED on zen.spamhaus.org: 127.0.0.2\nNOT listed on bl.spamcop.net\n' |
 	omt_privacy_filter Bingo "$DOMAIN" "$HOST" "$EMAIL" "$PASS" > "$TEMP/providers"
 contains "$TEMP/providers" 'LISTED on zen.spamhaus.org: 127.0.0.2'
 contains "$TEMP/providers" 'NOT listed on bl.spamcop.net'
+printf 'Lookup unavailable on zen.spamhaus.org: 127.255.255.254; listing status unknown\nAddress: 127.255.255.254\n' |
+	omt_privacy_filter Bingo "$DOMAIN" "$HOST" "$EMAIL" "$PASS" > "$TEMP/provider-errors"
+contains "$TEMP/provider-errors" 'Lookup unavailable on zen.spamhaus.org: 127.255.255.254; listing status unknown'
+contains "$TEMP/provider-errors" 'Address: [Bingo IP]'
 printf 'zen.spamhaus.org\n' | omt_privacy_filter Bingo zen.spamhaus.org '' '' '' > "$TEMP/provider-target"
 contains "$TEMP/provider-target" '[Bingo domain]'
 
@@ -152,6 +195,17 @@ excludes "$TEMP/result.json" "$DOMAIN"
 excludes "$TEMP/result.json" "$PASS"
 printf '{"value":"hello\\n\\n"}' | omt_privacy_json Bingo '' '' '' '' > "$TEMP/newlines.json"
 jq -e '.value == "hello\n\n"' "$TEMP/newlines.json" >/dev/null || fail 'JSON trailing newlines lost'
+
+# Port fields become labeled redactions; unrelated numeric metadata keeps its type.
+printf '%s\n' '{"target":{"smtp_relay_port":25250,"smtp_port":25870,"smtps_port":24650,"imap_port":21143,"imaps_port":21993,"sieve_port":24190},"runs":25,"failures":0,"when":"2026-10-25T14:25:00Z","endpoint":{"port":25870},"unknown":{"smtp_port":null}}' |
+	omt_privacy_json Bingo "$DOMAIN" "$HOST" "$EMAIL" "$PASS" > "$TEMP/ports.json"
+jq -e '.target.smtp_relay_port == "[Bingo SMTP relay port]"
+	and .target.smtp_port == "[Bingo SMTP port]" and .target.smtps_port == "[Bingo SMTPS port]"
+	and .target.imap_port == "[Bingo IMAP port]" and .target.imaps_port == "[Bingo IMAPS port]"
+	and .target.sieve_port == "[Bingo Sieve port]" and .endpoint.port == "[Bingo port]"
+	and .unknown.smtp_port == null and .runs == 25 and .failures == 0
+	and .when == "2026-10-25T14:25:00Z"' "$TEMP/ports.json" >/dev/null || fail 'private port metadata changed unrelated values'
+for port in 25250 25870 24650 21143 21993 24190; do excludes "$TEMP/ports.json" "$port"; done
 
 # Invalid aliases and invalid JSON fail closed without echoing the input.
 if printf 'private-domain.example\n' | omt_privacy_filter 'unsafe.example' '' '' '' '' > "$TEMP/rejected" 2>&1; then fail 'invalid alias accepted'; fi

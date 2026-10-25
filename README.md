@@ -28,8 +28,8 @@ OctoMailTest performs:
 - TLS-RPT
 
 ### Connectivity
-- SMTP (25, 465, 587)
-- IMAPS (993)
+- SMTP relay (25), SMTP submission (587), and SMTPS (465)
+- IMAP (143) and IMAPS (993)
 - ManageSieve (4190)
 
 ### TLS & security
@@ -48,61 +48,51 @@ OctoMailTest performs:
 - PTR validation
 - SMTP feature discovery
 
-The mail diagnostic sends one test email to the configured mailbox itself
-when `swaks` is installed. It does not delete mail.
+All configured SMTP and IMAP ports are tested, including their available
+features. SMTPS and IMAPS must pass for the run to succeed. A closed or
+failed normal SMTP or IMAP alternative produces a warning. Failure of a
+required secure endpoint remains critical even if the other alternative works.
+DNS, relay, RBL, and Sieve checks remain part of the diagnostic suite.
+DNSBL provider errors, including Spamhaus lookup restrictions, are reported
+as lookup unavailable/status unknown warnings. A confirmed listing remains
+a failure.
+
+The mail diagnostic sends a test email to the configured mailbox itself
+through each working SMTP alternative when `swaks` is installed. Equal
+configured ports are tested once. It does not delete mail.
 
 ---
 
 ## Environment variables
 
-All configuration is driven by `OCTOMAILTEST_*`
+Only the host, mailbox address, and password are required:
 
 ```bash
-OCTOMAILTEST_DOMAIN=email.com
 OCTOMAILTEST_HOST=mx1.email.host
 OCTOMAILTEST_EMAIL=your@email.com
 OCTOMAILTEST_PASS=secret
+```
 
-OCTOMAILTEST_IMAP_PORT=993
+The DNS domain is derived from the mailbox address. Set
+`OCTOMAILTEST_DOMAIN` only when the DNS checks should use another domain.
+All standard ports are tested by default; override only custom ports:
+
+```bash
+OCTOMAILTEST_SMTP_RELAY_PORT=25
 OCTOMAILTEST_SMTP_PORT=587
-OCTOMAILTEST_SMTP_TLS_MODE=auto
-OCTOMAILTEST_SMTP_STARTTLS_PORT=
-OCTOMAILTEST_SMTPS_PORT=
+OCTOMAILTEST_SMTPS_PORT=465
+OCTOMAILTEST_IMAP_PORT=143
+OCTOMAILTEST_IMAPS_PORT=993
 OCTOMAILTEST_SIEVE_PORT=4190
 ```
 
 You may also use `.octomailtest`; its keys omit the `OCTOMAILTEST_` prefix
 (see [`.octomailtest.example`](.octomailtest.example)).
 
-### Secure SMTP connections
-
-`SMTP_PORT` selects the endpoint used for SMTP authentication, sending the
-test message, and the submission diagnostics. `SMTP_TLS_MODE=auto` uses
-implicit TLS on port `465` (SMTPS), and STARTTLS on other ports. Set
-`SMTP_TLS_MODE=implicit` or `SMTP_TLS_MODE=starttls` explicitly when a
-custom port uses one of those protocols. Implicit TLS starts encryption
-as soon as the connection opens; STARTTLS must complete its TLS upgrade
-before authentication. Neither mode falls back to plaintext authentication.
-
-The separate STARTTLS and SMTPS checks remain enabled. If
-`SMTP_STARTTLS_PORT` is unset or `0`, it uses `SMTP_PORT` when the selected mode
-is STARTTLS, otherwise `587`. If `SMTPS_PORT` is unset or `0`, it uses `SMTP_PORT`
-when the selected mode is implicit TLS, otherwise `465`. Set both ports
-explicitly when those services use custom ports. A port paired with the
-wrong TLS mode can fail even when the server is healthy; the number alone
-does not change how the server expects a TLS connection to begin.
-
-For an SMTPS submission endpoint and IMAPS mailbox, use:
-
-```bash
-OCTOMAILTEST_SMTP_PORT=465
-OCTOMAILTEST_SMTP_TLS_MODE=implicit
-OCTOMAILTEST_SMTP_STARTTLS_PORT=587
-OCTOMAILTEST_SMTPS_PORT=465
-OCTOMAILTEST_IMAP_PORT=993
-```
-
-IMAP uses implicit TLS (IMAPS), with port `993` by default.
+SMTP and IMAP transport detection is automatic: standard ports provide
+the initial TLS hint, and bounded probes identify custom ports. STARTTLS
+upgrades the connection before authentication; implicit TLS encrypts it
+from the start. Credentials are never sent over a plaintext fallback.
 
 ---
 
@@ -112,7 +102,6 @@ IMAP uses implicit TLS (IMAPS), with port `993` by default.
 
 ```bash
 docker run --rm \
-  -e OCTOMAILTEST_DOMAIN=email.com \
   -e OCTOMAILTEST_HOST=mx1.email.host \
   -e OCTOMAILTEST_EMAIL=you@email.com \
   -e OCTOMAILTEST_PASS=secret \
@@ -157,9 +146,9 @@ emit it, including in the running action's log. Saved reports and the job
 summary are generated after the diagnostics finish.
 
 Configured domains, hosts, and mailbox addresses receive consistent alias
-labels. Discovered domains, addresses, IPs, and identifying certificate or
-authentication data are redacted as well. Technical findings such as port
-numbers, TLS versions, ciphers, and certificate expiry remain useful.
+labels. Discovered domains, addresses, IPs, port numbers, and identifying
+certificate or authentication data are redacted as well. Protocol names,
+test outcomes, TLS versions, ciphers, and certificate expiry remain visible.
 Anonymization happens before output is published to the console, report
 files, GitHub annotations, or the job summary. Both stdout and stderr are
 covered. JSON and file logging receive the anonymized findings too.
@@ -169,8 +158,8 @@ identifying artifact names and report locations are replaced with alias-based
 names, and runner machine names are anonymized. Only the three generated
 report files are uploaded, so unrelated files in a report directory are excluded.
 
-The diagnostic commands, their order, and their existing pass/fail rules
-are unchanged. Private mode changes how results are presented.
+Private mode changes presentation, not which diagnostics run or how their
+results are evaluated.
 
 With the usual `OCTOMAILTEST_*` credentials already exported, run from the
 repository root:
@@ -285,15 +274,16 @@ jobs:
       - name: Test Bingo
         uses: octoleo/octomailtest@master
         with:
-          domain: ${{ secrets.BINGO_DOMAIN }}
           host: ${{ secrets.BINGO_HOST }}
           email: ${{ secrets.BINGO_EMAIL }}
           pass: ${{ secrets.BINGO_PASS }}
-          imap-port: ${{ secrets.BINGO_IMAP_PORT }}
+          domain: ${{ secrets.BINGO_DOMAIN }}
+          smtp-relay-port: ${{ secrets.BINGO_SMTP_RELAY_PORT }}
           smtp-port: ${{ secrets.BINGO_SMTP_PORT }}
-          smtp-tls-mode: ${{ secrets.BINGO_SMTP_TLS_MODE }}
-          smtp-starttls-port: ${{ secrets.BINGO_SMTP_STARTTLS_PORT }}
           smtps-port: ${{ secrets.BINGO_SMTPS_PORT }}
+          imap-port: ${{ secrets.BINGO_IMAP_PORT }}
+          imaps-port: ${{ secrets.BINGO_IMAPS_PORT }}
+          sieve-port: ${{ secrets.BINGO_SIEVE_PORT }}
           private: true
           alias: Bingo
           quiet: false
@@ -309,12 +299,10 @@ diagnostic results are recorded before the action applies `fail-on-error`,
 so a history update does not turn a failed check into a successful one.
 Branch protection rules must permit the workflow's history commits.
 
-The port and TLS mode secrets are optional; empty values use the defaults
-and port derivation described below. For SMTPS submission, set
-`BINGO_SMTP_PORT` to `465` and `BINGO_SMTP_TLS_MODE` to `implicit` (or leave
-the mode unset to use `auto`). `BINGO_IMAP_PORT` can be `993` or unset for
-IMAPS. The separate STARTTLS check still uses `587` unless
-`BINGO_SMTP_STARTTLS_PORT` specifies another port.
+Only `BINGO_HOST`, `BINGO_EMAIL`, and `BINGO_PASS` are required. Leave
+`BINGO_DOMAIN` unset to derive the DNS domain from the email address.
+All six port secrets are optional; leave them unset to test the standard
+ports. Add a port secret only when that service uses a custom port.
 
 The CLI environment equivalents are:
 
@@ -386,10 +374,10 @@ jobs:
       - name: Test the mail service
         uses: octoleo/octomailtest@master
         with:
-          domain: example.com
-          host: mx1.example.com
+          host: ${{ secrets.OCTOMAILTEST_HOST }}
           email: ${{ secrets.OCTOMAILTEST_EMAIL }}
           pass: ${{ secrets.OCTOMAILTEST_PASS }}
+          private: true
 ```
 
 No checkout step is needed. When the run finishes:
@@ -415,7 +403,6 @@ jobs:
   octomailtest:
     uses: octoleo/octomailtest/.github/workflows/octomailtest.yml@master
     with:
-      domain: example.com
       host: mx1.example.com
       email: postmaster@example.com
     secrets:
@@ -426,7 +413,7 @@ jobs:
 and `OCTOMAILTEST_EMAIL` instead of inputs, so a caller whose repository
 already defines the `OCTOMAILTEST_*` secrets can simply use
 `secrets: inherit`. The workflow accepts the same options as the action
-(`mode`, ports, `smtp-tls-mode`, `quiet`, `timeout`, `fail-on-error`, `artifact-name`,
+(`mode`, ports, `quiet`, `timeout`, `fail-on-error`, `artifact-name`,
 `retention-days`, `private`, `alias`, `runs-on`) and exposes `status`, `exit-code`, `failures`,
 `warnings`, `artifact-name` and `artifact-url` as outputs.
 
@@ -443,20 +430,20 @@ started manually from the **Actions** tab.
 
 | Input | Default | Description |
 |---|---|---|
-| `domain` | | Mail domain for the DNS checks (`OCTOMAILTEST_DOMAIN`). DNS checks are skipped without it. |
+| `domain` | from email | Optional domain for DNS checks (`OCTOMAILTEST_DOMAIN`). Defaults to the part after `@` in the mailbox address. |
 | `host` | | Mail server host (`OCTOMAILTEST_HOST`). Required unless `config-file` provides it. |
 | `email` | | Mailbox address (`OCTOMAILTEST_EMAIL`). Required unless `config-file` provides it. |
 | `pass` | | Mailbox password (`OCTOMAILTEST_PASS`). Always pass a secret. Required unless `config-file` provides it. |
-| `imap-port` | `993` | IMAPS port (`OCTOMAILTEST_IMAP_PORT`). Empty or `0` keeps the default. |
-| `smtp-port` | `587` | Submission endpoint used for SMTP authentication, sending, and submission diagnostics (`OCTOMAILTEST_SMTP_PORT`). Empty or `0` keeps the default. |
-| `smtp-tls-mode` | `auto` | Submission transport (`OCTOMAILTEST_SMTP_TLS_MODE`): `auto` selects implicit TLS on port `465`, otherwise STARTTLS. Use `implicit` or `starttls` for an explicit choice. Empty preserves the environment/config setting, defaulting to `auto`. |
-| `smtp-starttls-port` | derived | Separate STARTTLS check port (`OCTOMAILTEST_SMTP_STARTTLS_PORT`). Empty or `0` uses the submission port in STARTTLS mode, otherwise `587`. |
-| `smtps-port` | derived | Separate implicit TLS check port (`OCTOMAILTEST_SMTPS_PORT`). Empty or `0` uses the submission port in implicit TLS mode, otherwise `465`. |
+| `smtp-relay-port` | `25` | SMTP relay reachability and greeting (`OCTOMAILTEST_SMTP_RELAY_PORT`). |
+| `smtp-port` | `587` | Normal SMTP submission alternative (`OCTOMAILTEST_SMTP_PORT`); TLS is detected automatically. |
+| `smtps-port` | `465` | Required SMTPS endpoint (`OCTOMAILTEST_SMTPS_PORT`); TLS is detected automatically. |
+| `imap-port` | `143` | Normal IMAP alternative (`OCTOMAILTEST_IMAP_PORT`); TLS is detected automatically. |
+| `imaps-port` | `993` | Required IMAPS endpoint (`OCTOMAILTEST_IMAPS_PORT`); TLS is detected automatically. |
 | `sieve-port` | `4190` | ManageSieve port (`OCTOMAILTEST_SIEVE_PORT`). Empty or `0` keeps the default. |
 | `mode` | `both` | `both`, `mail` or `imap`, like the Docker image command. |
 | `config-file` | | Path of an `.octomailtest` file (see `.octomailtest.example`) as an alternative to the inputs above. |
 | `quiet` | `false` | Strip the `=====` separator lines, like `--ci`. |
-| `private` | `false` | Anonymize identifying values in detailed output and reports. Independent of `quiet`. |
+| `private` | `false` | Anonymize identifying values and port numbers in detailed output and reports. Independent of `quiet`. |
 | `alias` | `OctoMailTest` | Public target label and history subdirectory; 1–64 letters, digits, underscores, or hyphens, starting with a letter or digit. |
 | `history` | `false` | Record timestamped results, cumulative counters, and retained reports locally. |
 | `history-keep` | `10` | Positive number of recent runs to retain per alias; cumulative counters are not pruned. |
@@ -472,6 +459,7 @@ started manually from the **Actions** tab.
 | `step-summary` | `true` | Write the Markdown summary (with the full report) to the job summary. |
 | `annotations` | `true` | Emit an error annotation per critical failure and a warning annotation with the warning count. |
 
+Port inputs are optional; empty values or `0` use their standard defaults.
 The inputs win over `OCTOMAILTEST_*` variables set in the job `env`, which
 in turn win over values from a config file, matching the precedence of the
 scripts themselves.
@@ -513,13 +501,14 @@ preserving the individual test messages and outcomes.
 
 ### Good to know
 
-- Like every OctoMailTest run, the action **sends one test email to the
-  mailbox itself** as part of the SMTP send test when `swaks` is available.
+- The action **sends a test email to the mailbox itself through each working
+  SMTP alternative** when `swaks` is available (normally two messages when
+  both submission endpoints work).
 - Without private mode, reports identify the target host and mailbox.
   Enable `private: true` when publishing detailed results from a public
   workflow, and pass all target values through GitHub secrets.
-- `src/imap` is informational and never fails by itself; `src/mail` decides
-  the pass/fail result.
+- Both diagnostic scripts report critical failures through a nonzero exit
+  status, which the action includes in its result.
 - Supported runners: Linux (`ubuntu-latest` is the tested target; Debian,
   Ubuntu, Alpine, Fedora/RHEL, openSUSE and Arch package managers are
   handled) and macOS (Homebrew). Windows runners are not supported.
@@ -553,41 +542,39 @@ Configuration precedence:
 3. `.octomailtest`
 4. Defaults
 
-The secure SMTP options have matching CLI, environment, and config names:
+Optional ports have matching CLI, environment, and config names:
 
 | CLI flag | Environment variable | `.octomailtest` key | Default |
 |---|---|---|---|
+| `--smtp-relay-port` | `OCTOMAILTEST_SMTP_RELAY_PORT` | `SMTP_RELAY_PORT` | `25` |
 | `--smtp-port` | `OCTOMAILTEST_SMTP_PORT` | `SMTP_PORT` | `587` |
-| `--smtp-tls-mode` | `OCTOMAILTEST_SMTP_TLS_MODE` | `SMTP_TLS_MODE` | `auto` |
-| `--smtp-starttls-port` | `OCTOMAILTEST_SMTP_STARTTLS_PORT` | `SMTP_STARTTLS_PORT` | Submission port in STARTTLS mode, otherwise `587` |
-| `--smtps-port` | `OCTOMAILTEST_SMTPS_PORT` | `SMTPS_PORT` | Submission port in implicit TLS mode, otherwise `465` |
-| `--imap-port` | `OCTOMAILTEST_IMAP_PORT` | `IMAP_PORT` | `993` (IMAPS) |
+| `--smtps-port` | `OCTOMAILTEST_SMTPS_PORT` | `SMTPS_PORT` | `465` |
+| `--imap-port` | `OCTOMAILTEST_IMAP_PORT` | `IMAP_PORT` | `143` |
+| `--imaps-port` | `OCTOMAILTEST_IMAPS_PORT` | `IMAPS_PORT` | `993` |
+| `--sieve-port` | `OCTOMAILTEST_SIEVE_PORT` | `SIEVE_PORT` | `4190` |
 
-For the separate STARTTLS and SMTPS check ports, an unset value or `0`
-uses the derived default, including CLI, environment, and config settings.
-
-For example, run the full mail diagnostic with SMTPS authentication and
-sending, while retaining the separate STARTTLS check:
+With the three required credentials already configured, run the mail
+diagnostics on all standard ports:
 
 ```bash
-./src/mail --smtp-port 465 --smtp-tls-mode implicit \
-  --smtp-starttls-port 587 --smtps-port 465 --imap-port 993 \
-  --private --alias Bingo
+./src/mail --private --alias Bingo
 ```
 
 ---
 
 ## Security notes
 
-* Private mode anonymizes diagnostic output before publication, including
-  reports, summaries, and annotations. It does not encrypt the reports.
+* Private mode anonymizes identifying values and port numbers before
+  publication, including reports, summaries, and annotations. It does not
+  encrypt the reports.
 * Treat the public alias, workflow names, and configured report/history
   paths as public labels; do not put identifying values in them.
 * The runner still needs the real connection details and credentials to
   perform the tests. Keep those in GitHub secrets or a protected local
   configuration, and use a dedicated test mailbox.
-* No mail deletion occurs. The existing mail diagnostic sends a test
-  message to the configured mailbox itself when `swaks` is available.
+* No mail deletion occurs. The mail diagnostic sends test messages to the
+  configured mailbox itself through the working SMTP alternatives when
+  `swaks` is available.
 
 ---
 
