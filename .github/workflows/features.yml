@@ -43,3 +43,4 @@ jobs:
           bash tests/history.sh
           bash tests/cli.sh
           bash tests/action.sh
+          bash tests/smtp-transport.sh

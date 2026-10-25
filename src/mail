@@ -32,6 +32,9 @@ PASS=""
 
 IMAP_PORT=993
 SMTP_PORT=587
+SMTP_TLS_MODE=auto
+SMTP_STARTTLS_PORT=""
+SMTPS_PORT=""
 SIEVE_PORT=4190
 
 CONFIG_FILE="./.octomailtest"
@@ -93,7 +96,7 @@ openssl_smtp_starttls() {
 	timeout 10 bash -c '
 		printf "%s" "$1" | openssl s_client \
 			-starttls smtp \
-			-connect "'"$HOST:$SMTP_PORT"'" \
+			-connect "'"$HOST:$SMTP_STARTTLS_PORT"'" \
 			-servername "'"$HOST"'" \
 			-crlf \
 			-quiet 2>/dev/null
@@ -120,6 +123,9 @@ PASS="${OCTOMAILTEST_PASS:-${PASS:-}}"
 
 IMAP_PORT="${OCTOMAILTEST_IMAP_PORT:-${IMAP_PORT}}"
 SMTP_PORT="${OCTOMAILTEST_SMTP_PORT:-${SMTP_PORT}}"
+SMTP_TLS_MODE="${OCTOMAILTEST_SMTP_TLS_MODE:-${SMTP_TLS_MODE}}"
+SMTP_STARTTLS_PORT="${OCTOMAILTEST_SMTP_STARTTLS_PORT:-${SMTP_STARTTLS_PORT}}"
+SMTPS_PORT="${OCTOMAILTEST_SMTPS_PORT:-${SMTPS_PORT}}"
 SIEVE_PORT="${OCTOMAILTEST_SIEVE_PORT:-${SIEVE_PORT}}"
 
 #############################################
@@ -138,6 +144,12 @@ Options:
 
       --imap-port    IMAP port   (default: 993)
       --smtp-port    SMTP port   (default: 587)
+      --smtp-tls-mode MODE  auto, starttls, or implicit (default: auto;
+                           implicit on port 465, STARTTLS otherwise)
+      --smtp-starttls-port PORT  Separate STARTTLS check (default: SMTP port
+                                in STARTTLS mode, otherwise 587; 0 derives)
+      --smtps-port PORT          Separate SMTPS check (default: SMTP port
+                                in implicit mode, otherwise 465; 0 derives)
       --sieve-port   Sieve port  (default: 4190)
 
   -c, --config       Config file (default: ./.octomailtest)
@@ -159,6 +171,9 @@ Environment variables:
   OCTOMAILTEST_PASS
   OCTOMAILTEST_IMAP_PORT
   OCTOMAILTEST_SMTP_PORT
+  OCTOMAILTEST_SMTP_TLS_MODE
+  OCTOMAILTEST_SMTP_STARTTLS_PORT
+  OCTOMAILTEST_SMTPS_PORT
   OCTOMAILTEST_SIEVE_PORT
 
 Precedence:
@@ -183,6 +198,15 @@ while [[ $# -gt 0 ]]; do
 			IMAP_PORT="${2:-}"; shift 2 ;;
 		--smtp-port)
 			SMTP_PORT="${2:-}"; shift 2 ;;
+		--smtp-tls-mode)
+			[[ $# -ge 2 && -n "${2:-}" ]] || die "--smtp-tls-mode requires a value"
+			SMTP_TLS_MODE="$2"; shift 2 ;;
+		--smtp-starttls-port)
+			[[ $# -ge 2 && -n "${2:-}" ]] || die "--smtp-starttls-port requires a value"
+			SMTP_STARTTLS_PORT="$2"; shift 2 ;;
+		--smtps-port)
+			[[ $# -ge 2 && -n "${2:-}" ]] || die "--smtps-port requires a value"
+			SMTPS_PORT="$2"; shift 2 ;;
 		--sieve-port)
 			SIEVE_PORT="${2:-}"; shift 2 ;;
 		-c|--config)
@@ -218,6 +242,36 @@ fi
 if [[ -z "$DOMAIN" ]]; then
 	# Not fatal, but some DNS tests depend on it.
 	warn "DOMAIN not set; DNS record checks will be limited."
+fi
+
+# Submission always requires TLS; auto only selects the handshake style.
+SMTP_TLS_MODE="$(printf '%s' "$SMTP_TLS_MODE" | tr '[:upper:]' '[:lower:]')"
+case "$SMTP_TLS_MODE" in
+	auto)
+		if [[ "$SMTP_PORT" == 465 ]]; then
+			SMTP_TLS_MODE=implicit
+		else
+			SMTP_TLS_MODE=starttls
+		fi
+		;;
+	starttls|implicit) ;;
+	*) die "SMTP TLS mode must be auto, starttls, or implicit" ;;
+esac
+
+[[ "$SMTP_STARTTLS_PORT" != 0 ]] || SMTP_STARTTLS_PORT=""
+[[ "$SMTPS_PORT" != 0 ]] || SMTPS_PORT=""
+SMTP_OPENSSL_ARGS=(-connect "${HOST}:${SMTP_PORT}" -servername "${HOST}")
+if [[ "$SMTP_TLS_MODE" == implicit ]]; then
+	SMTP_SWAKS_TLS=--tls-on-connect
+	SMTP_TLS_LABEL="implicit TLS"
+	SMTP_STARTTLS_PORT="${SMTP_STARTTLS_PORT:-587}"
+	SMTPS_PORT="${SMTPS_PORT:-$SMTP_PORT}"
+else
+	SMTP_OPENSSL_ARGS+=(-starttls smtp)
+	SMTP_SWAKS_TLS=--tls
+	SMTP_TLS_LABEL=STARTTLS
+	SMTP_STARTTLS_PORT="${SMTP_STARTTLS_PORT:-$SMTP_PORT}"
+	SMTPS_PORT="${SMTPS_PORT:-465}"
 fi
 
 #############################################
@@ -296,7 +350,14 @@ fi
 echo "================================================="
 echo " SMTP/IMAP/SIEVE Port Reachability (${HOST})"
 echo "================================================="
-PORTS=(25 465 587 "${IMAP_PORT}" "${SIEVE_PORT}")
+PORTS=(25 "${SMTPS_PORT}" "${SMTP_STARTTLS_PORT}" "${IMAP_PORT}" "${SIEVE_PORT}")
+SMTP_PORT_CHECKED=0
+for port in "${PORTS[@]}"; do
+	[[ "$port" != "$SMTP_PORT" ]] || SMTP_PORT_CHECKED=1
+done
+if [[ "$SMTP_PORT_CHECKED" == 0 ]]; then
+	PORTS+=("${SMTP_PORT}")
+fi
 for port in "${PORTS[@]}"; do
 	echo -n "Port ${port}: "
 	if nc -zv "${HOST}" "${port}" 2>&1 | grep -E "succeeded|open" >/dev/null; then
@@ -312,26 +373,26 @@ echo
 #############################################
 
 echo "================================================="
-echo " STARTTLS on ${SMTP_PORT}"
+echo " STARTTLS on ${SMTP_STARTTLS_PORT}"
 echo "================================================="
-if echo | openssl s_client -starttls smtp -connect "${HOST}:${SMTP_PORT}" -servername "${HOST}" 2>/dev/null \
+if echo | openssl s_client -starttls smtp -connect "${HOST}:${SMTP_STARTTLS_PORT}" -servername "${HOST}" 2>/dev/null \
 	| openssl x509 -noout -subject -issuer -dates >/dev/null 2>&1; then
-	echo | openssl s_client -starttls smtp -connect "${HOST}:${SMTP_PORT}" -servername "${HOST}" 2>/dev/null \
+	echo | openssl s_client -starttls smtp -connect "${HOST}:${SMTP_STARTTLS_PORT}" -servername "${HOST}" 2>/dev/null \
 		| openssl x509 -noout -subject -issuer -dates
 else
-	fail "Unable to fetch certificate via SMTP STARTTLS on ${SMTP_PORT}"
+	fail "Unable to fetch certificate via SMTP STARTTLS on ${SMTP_STARTTLS_PORT}"
 fi
 echo
 
 echo "================================================="
-echo " SMTPS on 465"
+echo " SMTPS on ${SMTPS_PORT}"
 echo "================================================="
-if echo | openssl s_client -connect "${HOST}:465" -servername "${HOST}" 2>/dev/null \
+if echo | openssl s_client -connect "${HOST}:${SMTPS_PORT}" -servername "${HOST}" 2>/dev/null \
 	| openssl x509 -noout -subject -issuer -dates >/dev/null 2>&1; then
-	echo | openssl s_client -connect "${HOST}:465" -servername "${HOST}" 2>/dev/null \
+	echo | openssl s_client -connect "${HOST}:${SMTPS_PORT}" -servername "${HOST}" 2>/dev/null \
 		| openssl x509 -noout -subject -issuer -dates
 else
-	fail "Unable to fetch certificate via SMTPS on 465"
+	fail "Unable to fetch certificate via SMTPS on ${SMTPS_PORT}"
 fi
 echo
 
@@ -625,19 +686,19 @@ echo
 #############################################
 
 echo "================================================="
-echo " SMTP STARTTLS capability"
+echo " SMTP ${SMTP_TLS_LABEL} capability"
 echo "================================================="
 SMTP_EHLO="$(timeout 5 swaks \
 	--server "${HOST}" \
 	--port "${SMTP_PORT}" \
-	--tls \
+	"${SMTP_SWAKS_TLS}" \
 	--ehlo test \
 	--quit-after EHLO 2>/dev/null || true)"
 echo "$SMTP_EHLO" | head -40 || true
 if echo "$SMTP_EHLO" | grep -qi "250-"; then
-	echo "✅ SMTP EHLO succeeded over STARTTLS"
+	echo "✅ SMTP EHLO succeeded over ${SMTP_TLS_LABEL}"
 else
-	fail "SMTP EHLO over STARTTLS failed"
+	fail "SMTP EHLO over ${SMTP_TLS_LABEL} failed"
 fi
 echo
 
@@ -725,7 +786,7 @@ if [[ "$HAS_SWAKS" -eq 1 ]]; then
 		--auth LOGIN \
 		--auth-user "${EMAIL}" \
 		--auth-password "${PASS}" \
-		--tls \
+		"${SMTP_SWAKS_TLS}" \
 		--quit-after AUTH \
 		--no-data >/dev/null 2>&1 && echo "✅ SMTP AUTH succeeded" || fail "SMTP AUTH failed"
 	echo
@@ -739,7 +800,7 @@ if [[ "$HAS_SWAKS" -eq 1 ]]; then
 		--auth LOGIN \
 		--auth-user "${EMAIL}" \
 		--auth-password "${PASS}" \
-		--tls \
+		"${SMTP_SWAKS_TLS}" \
 		--from "${EMAIL}" \
 		--to "${EMAIL}" \
 		--header "Subject: ${TEST_SUBJECT}" \
@@ -753,14 +814,14 @@ else
 fi
 
 #############################################
-# Certificate expiration check (SMTP STARTTLS)
+# Certificate expiration check (selected SMTP transport)
 #############################################
 
 echo "================================================="
 echo " Certificate expiration check"
 echo "================================================="
 CERT_EXPIRY="$(
-	echo | openssl s_client -connect "${HOST}:${SMTP_PORT}" -servername "${HOST}" -starttls smtp 2>/dev/null \
+	echo | openssl s_client "${SMTP_OPENSSL_ARGS[@]}" 2>/dev/null \
 	| openssl x509 -noout -enddate 2>/dev/null \
 	| cut -d= -f2 || true
 )"
@@ -796,7 +857,7 @@ echo "================================================="
 echo " Certificate hostname verification"
 echo "================================================="
 CERT_SANS="$(
-	echo | openssl s_client -connect "${HOST}:${SMTP_PORT}" -servername "${HOST}" -starttls smtp 2>/dev/null \
+	echo | openssl s_client "${SMTP_OPENSSL_ARGS[@]}" 2>/dev/null \
 	| openssl x509 -noout -text 2>/dev/null \
 	| awk '/Subject Alternative Name/{flag=1;next}/X509v3/{flag=0}flag' \
 	| tr -d '\n' || true
@@ -821,10 +882,9 @@ echo "================================================="
 echo " TLS 1.0 capability test"
 echo "================================================="
 if timeout 5 openssl s_client \
-	-starttls smtp \
+	"${SMTP_OPENSSL_ARGS[@]}" \
 	-tls1 \
-	-connect "${HOST}:587" \
-	-servername "${HOST}" < /dev/null 2>&1 \
+	< /dev/null 2>&1 \
 | grep -qi "Protocol  *: TLSv1"; then
 	echo "TLS 1.0 supported"
 else
@@ -836,10 +896,9 @@ echo "================================================="
 echo " TLS 1.1 capability test"
 echo "================================================="
 if timeout 5 openssl s_client \
-	-starttls smtp \
+	"${SMTP_OPENSSL_ARGS[@]}" \
 	-tls1_1 \
-	-connect "${HOST}:587" \
-	-servername "${HOST}" < /dev/null 2>&1 \
+	< /dev/null 2>&1 \
 | grep -qi "Protocol  *: TLSv1.1"; then
 	echo "TLS 1.1 supported"
 else
@@ -851,10 +910,9 @@ echo "================================================="
 echo " TLS acceptance test (TLS 1.2+)"
 echo "================================================="
 if timeout 5 openssl s_client \
-	-starttls smtp \
+	"${SMTP_OPENSSL_ARGS[@]}" \
 	-tls1_2 \
-	-connect "${HOST}:${SMTP_PORT}" \
-	-servername "${HOST}" < /dev/null 2>&1 \
+	< /dev/null 2>&1 \
 | grep -Eqi "Protocol *: TLSv1\.(2|3)"; then
 	echo "✅ OK (Modern TLS accepted)"
 else
@@ -866,10 +924,9 @@ echo "================================================="
 echo " TLS 1.3 support test"
 echo "================================================="
 if timeout 5 openssl s_client \
-	-starttls smtp \
+	"${SMTP_OPENSSL_ARGS[@]}" \
 	-tls1_3 \
-	-connect "${HOST}:${SMTP_PORT}" \
-	-servername "${HOST}" < /dev/null 2>&1 \
+	< /dev/null 2>&1 \
 | grep -qiE "Protocol *: TLSv1\.3"; then
 	echo "✅ TLS 1.3 supported (optimal)"
 else

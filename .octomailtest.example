@@ -5,4 +5,12 @@ PASS="secret"
 
 IMAP_PORT=993
 SMTP_PORT=587
+SMTP_TLS_MODE=auto
+# auto selects implicit TLS for SMTP_PORT=465, otherwise STARTTLS.
+# For custom SMTPS ports, set SMTP_TLS_MODE=implicit explicitly.
+# Leave these empty or use 0 to derive them from SMTP_PORT and SMTP_TLS_MODE:
+# STARTTLS uses SMTP_PORT in STARTTLS mode, otherwise 587;
+# SMTPS uses SMTP_PORT in implicit TLS mode, otherwise 465.
+SMTP_STARTTLS_PORT=
+SMTPS_PORT=
 SIEVE_PORT=4190

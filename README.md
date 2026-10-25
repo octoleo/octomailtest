@@ -65,10 +65,44 @@ OCTOMAILTEST_PASS=secret
 
 OCTOMAILTEST_IMAP_PORT=993
 OCTOMAILTEST_SMTP_PORT=587
+OCTOMAILTEST_SMTP_TLS_MODE=auto
+OCTOMAILTEST_SMTP_STARTTLS_PORT=
+OCTOMAILTEST_SMTPS_PORT=
 OCTOMAILTEST_SIEVE_PORT=4190
 ```
 
-You may also place these in `.octomailtest`.
+You may also use `.octomailtest`; its keys omit the `OCTOMAILTEST_` prefix
+(see [`.octomailtest.example`](.octomailtest.example)).
+
+### Secure SMTP connections
+
+`SMTP_PORT` selects the endpoint used for SMTP authentication, sending the
+test message, and the submission diagnostics. `SMTP_TLS_MODE=auto` uses
+implicit TLS on port `465` (SMTPS), and STARTTLS on other ports. Set
+`SMTP_TLS_MODE=implicit` or `SMTP_TLS_MODE=starttls` explicitly when a
+custom port uses one of those protocols. Implicit TLS starts encryption
+as soon as the connection opens; STARTTLS must complete its TLS upgrade
+before authentication. Neither mode falls back to plaintext authentication.
+
+The separate STARTTLS and SMTPS checks remain enabled. If
+`SMTP_STARTTLS_PORT` is unset or `0`, it uses `SMTP_PORT` when the selected mode
+is STARTTLS, otherwise `587`. If `SMTPS_PORT` is unset or `0`, it uses `SMTP_PORT`
+when the selected mode is implicit TLS, otherwise `465`. Set both ports
+explicitly when those services use custom ports. A port paired with the
+wrong TLS mode can fail even when the server is healthy; the number alone
+does not change how the server expects a TLS connection to begin.
+
+For an SMTPS submission endpoint and IMAPS mailbox, use:
+
+```bash
+OCTOMAILTEST_SMTP_PORT=465
+OCTOMAILTEST_SMTP_TLS_MODE=implicit
+OCTOMAILTEST_SMTP_STARTTLS_PORT=587
+OCTOMAILTEST_SMTPS_PORT=465
+OCTOMAILTEST_IMAP_PORT=993
+```
+
+IMAP uses implicit TLS (IMAPS), with port `993` by default.
 
 ---
 
@@ -255,6 +289,11 @@ jobs:
           host: ${{ secrets.BINGO_HOST }}
           email: ${{ secrets.BINGO_EMAIL }}
           pass: ${{ secrets.BINGO_PASS }}
+          imap-port: ${{ secrets.BINGO_IMAP_PORT }}
+          smtp-port: ${{ secrets.BINGO_SMTP_PORT }}
+          smtp-tls-mode: ${{ secrets.BINGO_SMTP_TLS_MODE }}
+          smtp-starttls-port: ${{ secrets.BINGO_SMTP_STARTTLS_PORT }}
+          smtps-port: ${{ secrets.BINGO_SMTPS_PORT }}
           private: true
           alias: Bingo
           quiet: false
@@ -269,6 +308,13 @@ separate checkout or commit step is needed for `history-commit`. Failed
 diagnostic results are recorded before the action applies `fail-on-error`,
 so a history update does not turn a failed check into a successful one.
 Branch protection rules must permit the workflow's history commits.
+
+The port and TLS mode secrets are optional; empty values use the defaults
+and port derivation described below. For SMTPS submission, set
+`BINGO_SMTP_PORT` to `465` and `BINGO_SMTP_TLS_MODE` to `implicit` (or leave
+the mode unset to use `auto`). `BINGO_IMAP_PORT` can be `993` or unset for
+IMAPS. The separate STARTTLS check still uses `587` unless
+`BINGO_SMTP_STARTTLS_PORT` specifies another port.
 
 The CLI environment equivalents are:
 
@@ -380,7 +426,7 @@ jobs:
 and `OCTOMAILTEST_EMAIL` instead of inputs, so a caller whose repository
 already defines the `OCTOMAILTEST_*` secrets can simply use
 `secrets: inherit`. The workflow accepts the same options as the action
-(`mode`, ports, `quiet`, `timeout`, `fail-on-error`, `artifact-name`,
+(`mode`, ports, `smtp-tls-mode`, `quiet`, `timeout`, `fail-on-error`, `artifact-name`,
 `retention-days`, `private`, `alias`, `runs-on`) and exposes `status`, `exit-code`, `failures`,
 `warnings`, `artifact-name` and `artifact-url` as outputs.
 
@@ -402,7 +448,10 @@ started manually from the **Actions** tab.
 | `email` | | Mailbox address (`OCTOMAILTEST_EMAIL`). Required unless `config-file` provides it. |
 | `pass` | | Mailbox password (`OCTOMAILTEST_PASS`). Always pass a secret. Required unless `config-file` provides it. |
 | `imap-port` | `993` | IMAPS port (`OCTOMAILTEST_IMAP_PORT`). Empty or `0` keeps the default. |
-| `smtp-port` | `587` | SMTP submission port (`OCTOMAILTEST_SMTP_PORT`). Empty or `0` keeps the default. |
+| `smtp-port` | `587` | Submission endpoint used for SMTP authentication, sending, and submission diagnostics (`OCTOMAILTEST_SMTP_PORT`). Empty or `0` keeps the default. |
+| `smtp-tls-mode` | `auto` | Submission transport (`OCTOMAILTEST_SMTP_TLS_MODE`): `auto` selects implicit TLS on port `465`, otherwise STARTTLS. Use `implicit` or `starttls` for an explicit choice. Empty preserves the environment/config setting, defaulting to `auto`. |
+| `smtp-starttls-port` | derived | Separate STARTTLS check port (`OCTOMAILTEST_SMTP_STARTTLS_PORT`). Empty or `0` uses the submission port in STARTTLS mode, otherwise `587`. |
+| `smtps-port` | derived | Separate implicit TLS check port (`OCTOMAILTEST_SMTPS_PORT`). Empty or `0` uses the submission port in implicit TLS mode, otherwise `465`. |
 | `sieve-port` | `4190` | ManageSieve port (`OCTOMAILTEST_SIEVE_PORT`). Empty or `0` keeps the default. |
 | `mode` | `both` | `both`, `mail` or `imap`, like the Docker image command. |
 | `config-file` | | Path of an `.octomailtest` file (see `.octomailtest.example`) as an alternative to the inputs above. |
@@ -503,6 +552,28 @@ Configuration precedence:
 2. Environment variables
 3. `.octomailtest`
 4. Defaults
+
+The secure SMTP options have matching CLI, environment, and config names:
+
+| CLI flag | Environment variable | `.octomailtest` key | Default |
+|---|---|---|---|
+| `--smtp-port` | `OCTOMAILTEST_SMTP_PORT` | `SMTP_PORT` | `587` |
+| `--smtp-tls-mode` | `OCTOMAILTEST_SMTP_TLS_MODE` | `SMTP_TLS_MODE` | `auto` |
+| `--smtp-starttls-port` | `OCTOMAILTEST_SMTP_STARTTLS_PORT` | `SMTP_STARTTLS_PORT` | Submission port in STARTTLS mode, otherwise `587` |
+| `--smtps-port` | `OCTOMAILTEST_SMTPS_PORT` | `SMTPS_PORT` | Submission port in implicit TLS mode, otherwise `465` |
+| `--imap-port` | `OCTOMAILTEST_IMAP_PORT` | `IMAP_PORT` | `993` (IMAPS) |
+
+For the separate STARTTLS and SMTPS check ports, an unset value or `0`
+uses the derived default, including CLI, environment, and config settings.
+
+For example, run the full mail diagnostic with SMTPS authentication and
+sending, while retaining the separate STARTTLS check:
+
+```bash
+./src/mail --smtp-port 465 --smtp-tls-mode implicit \
+  --smtp-starttls-port 587 --smtps-port 465 --imap-port 993 \
+  --private --alias Bingo
+```
 
 ---
 

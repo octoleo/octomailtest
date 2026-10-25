@@ -47,11 +47,23 @@ on:
         type: string
         default: ''
       imap-port:
-        description: 'IMAP port (0 = 993)'
+        description: 'IMAPS port using implicit TLS (0 = 993)'
         type: number
         default: 0
       smtp-port:
-        description: 'SMTP port (0 = 587)'
+        description: 'SMTP submission port; transport follows smtp-tls-mode (0 = 587)'
+        type: number
+        default: 0
+      smtp-tls-mode:
+        description: 'Submission transport: auto, starttls or implicit (empty = environment/config, then auto)'
+        type: string
+        default: ''
+      smtp-starttls-port:
+        description: 'Dedicated STARTTLS port (0 = submission port in STARTTLS mode, otherwise 587)'
+        type: number
+        default: 0
+      smtps-port:
+        description: 'Dedicated SMTPS port (0 = submission port in implicit mode, otherwise 465)'
         type: number
         default: 0
       sieve-port:
@@ -110,11 +122,23 @@ on:
         type: string
         default: ''
       imap-port:
-        description: 'IMAP port (0 = 993)'
+        description: 'IMAPS port using implicit TLS (0 = 993)'
         type: number
         default: 0
       smtp-port:
-        description: 'SMTP port (0 = 587)'
+        description: 'SMTP submission port; transport follows smtp-tls-mode (0 = 587)'
+        type: number
+        default: 0
+      smtp-tls-mode:
+        description: 'Submission transport: auto, starttls or implicit (empty = environment/config, then auto)'
+        type: string
+        default: ''
+      smtp-starttls-port:
+        description: 'Dedicated STARTTLS port (0 = submission port in STARTTLS mode, otherwise 587)'
+        type: number
+        default: 0
+      smtps-port:
+        description: 'Dedicated SMTPS port (0 = submission port in implicit mode, otherwise 465)'
         type: number
         default: 0
       sieve-port:
@@ -247,6 +271,9 @@ jobs:
           mode: ${{ inputs.mode }}
           imap-port: ${{ inputs.imap-port }}
           smtp-port: ${{ inputs.smtp-port }}
+          smtp-tls-mode: ${{ inputs.smtp-tls-mode }}
+          smtp-starttls-port: ${{ inputs.smtp-starttls-port }}
+          smtps-port: ${{ inputs.smtps-port }}
           sieve-port: ${{ inputs.sieve-port }}
           private: ${{ inputs.private }}
           alias: ${{ inputs.alias }}
