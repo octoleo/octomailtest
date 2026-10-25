@@ -109,6 +109,13 @@ CONFIG_FILE="${OMT_CONFIG_FILE:-}"
 
 IMAP_PORT="$(parse_uint imap-port "${OMT_IMAP_PORT:-${OCTOMAILTEST_IMAP_PORT:-}}" '')"
 SMTP_PORT="$(parse_uint smtp-port "${OMT_SMTP_PORT:-${OCTOMAILTEST_SMTP_PORT:-}}" '')"
+SMTP_TLS_MODE="$(lower "${OMT_SMTP_TLS_MODE:-${OCTOMAILTEST_SMTP_TLS_MODE:-}}")"
+case "$SMTP_TLS_MODE" in
+	''|auto|starttls|implicit) ;;
+	*) die "Input 'smtp-tls-mode' must be auto, starttls or implicit." ;;
+esac
+SMTP_STARTTLS_PORT="$(parse_uint smtp-starttls-port "${OMT_SMTP_STARTTLS_PORT:-${OCTOMAILTEST_SMTP_STARTTLS_PORT:-}}" '')"
+SMTPS_PORT="$(parse_uint smtps-port "${OMT_SMTPS_PORT:-${OCTOMAILTEST_SMTPS_PORT:-}}" '')"
 SIEVE_PORT="$(parse_uint sieve-port "${OMT_SIEVE_PORT:-${OCTOMAILTEST_SIEVE_PORT:-}}" '')"
 TIMEOUT="$(parse_uint timeout "${OMT_TIMEOUT:-}" 900)"
 RETENTION_DAYS="$(parse_uint retention-days "${OMT_RETENTION_DAYS:-}" '')"
@@ -190,6 +197,17 @@ have swaks || warn "swaks is not installed: the SMTP AUTH and send-to-self tests
 [[ -n "$PASS" ]]       && export OCTOMAILTEST_PASS="$PASS"
 [[ -n "$IMAP_PORT" ]]  && export OCTOMAILTEST_IMAP_PORT="$IMAP_PORT"
 [[ -n "$SMTP_PORT" ]]  && export OCTOMAILTEST_SMTP_PORT="$SMTP_PORT"
+[[ -n "$SMTP_TLS_MODE" ]] && export OCTOMAILTEST_SMTP_TLS_MODE="$SMTP_TLS_MODE"
+if [[ -n "$SMTP_STARTTLS_PORT" ]]; then
+	export OCTOMAILTEST_SMTP_STARTTLS_PORT="$SMTP_STARTTLS_PORT"
+else
+	unset OCTOMAILTEST_SMTP_STARTTLS_PORT
+fi
+if [[ -n "$SMTPS_PORT" ]]; then
+	export OCTOMAILTEST_SMTPS_PORT="$SMTPS_PORT"
+else
+	unset OCTOMAILTEST_SMTPS_PORT
+fi
 [[ -n "$SIEVE_PORT" ]] && export OCTOMAILTEST_SIEVE_PORT="$SIEVE_PORT"
 export OCTOMAILTEST_CI=1
 
@@ -216,6 +234,55 @@ describe_port() {
 IMAP_PORT_EFFECTIVE="$(effective_port "$IMAP_PORT" 993)"
 SMTP_PORT_EFFECTIVE="$(effective_port "$SMTP_PORT" 587)"
 SIEVE_PORT_EFFECTIVE="$(effective_port "$SIEVE_PORT" 4190)"
+
+# Match the engine's transport defaults without reading or overriding its config.
+# With a config file, omitted settings remain unknown until the engine reads it.
+SMTP_TLS_MODE_EFFECTIVE="${SMTP_TLS_MODE:-auto}"
+if [[ "$SMTP_TLS_MODE_EFFECTIVE" == auto ]]; then
+	if [[ "$SMTP_PORT_EFFECTIVE" == 465 ]]; then
+		SMTP_TLS_MODE_EFFECTIVE=implicit
+	else
+		SMTP_TLS_MODE_EFFECTIVE=starttls
+	fi
+fi
+SMTP_STARTTLS_PORT_DEFAULT=587
+SMTPS_PORT_DEFAULT=465
+if [[ "$SMTP_TLS_MODE_EFFECTIVE" == starttls ]]; then
+	SMTP_STARTTLS_PORT_DEFAULT="$SMTP_PORT_EFFECTIVE"
+else
+	SMTPS_PORT_DEFAULT="$SMTP_PORT_EFFECTIVE"
+fi
+SMTP_STARTTLS_PORT_EFFECTIVE="$(effective_port "$SMTP_STARTTLS_PORT" "$SMTP_STARTTLS_PORT_DEFAULT")"
+SMTPS_PORT_EFFECTIVE="$(effective_port "$SMTPS_PORT" "$SMTPS_PORT_DEFAULT")"
+SMTP_PORT_REPORTED="$SMTP_PORT_EFFECTIVE"
+SMTP_TLS_MODE_REPORTED="$SMTP_TLS_MODE_EFFECTIVE"
+SMTP_STARTTLS_PORT_REPORTED="$SMTP_STARTTLS_PORT_EFFECTIVE"
+SMTPS_PORT_REPORTED="$SMTPS_PORT_EFFECTIVE"
+if [[ "$HAS_CONFIG" == true ]]; then
+	[[ -n "$SMTP_PORT" ]] || SMTP_PORT_REPORTED=null
+	if [[ -z "$SMTP_TLS_MODE" || ( "$SMTP_TLS_MODE" == auto && -z "$SMTP_PORT" ) ]]; then
+		SMTP_TLS_MODE_REPORTED=''
+	fi
+	[[ -n "$SMTP_STARTTLS_PORT" ]] || SMTP_STARTTLS_PORT_REPORTED=null
+	[[ -n "$SMTPS_PORT" ]] || SMTPS_PORT_REPORTED=null
+fi
+
+describe_smtp_transport() {
+	case "$SMTP_TLS_MODE_REPORTED" in
+		implicit) printf 'implicit TLS (SMTPS)' ;;
+		starttls) printf 'STARTTLS' ;;
+		'') printf 'from config file (default: auto; implicit TLS on 465, STARTTLS otherwise)' ;;
+	esac
+}
+
+describe_smtp_test_port() {
+	# Config can affect both the override and the submission settings it derives from.
+	if [[ -z "$1" && "$HAS_CONFIG" == true ]]; then
+		printf 'from config file or derived from SMTP submission settings'
+	else
+		describe_port "$1" "$2"
+	fi
+}
 
 #############################################
 # Report files
@@ -248,7 +315,10 @@ fi
 	echo "# Host:        ${HOST:-(from config file)}"
 	echo "# Mailbox:     ${EMAIL:-(from config file)}"
 	echo "# IMAP port:   $(describe_port "$IMAP_PORT" 993)"
-	echo "# SMTP port:   $(describe_port "$SMTP_PORT" 587)"
+	echo "# SMTP submission port: $(describe_port "$SMTP_PORT" 587)"
+	echo "# SMTP submission TLS:  $(describe_smtp_transport)"
+	echo "# SMTP STARTTLS port:   $(describe_smtp_test_port "$SMTP_STARTTLS_PORT" "$SMTP_STARTTLS_PORT_DEFAULT")"
+	echo "# SMTPS port:           $(describe_smtp_test_port "$SMTPS_PORT" "$SMTPS_PORT_DEFAULT")"
 	echo "# Sieve port:  $(describe_port "$SIEVE_PORT" 4190)"
 	echo "# Config file: ${CONFIG_FILE:-(none)}"
 	echo "# Runner:      ${RUNNER_OS:-$(uname -s)} ${RUNNER_ARCH:-$(uname -m)}${RUNNER_NAME:+ (${RUNNER_NAME})}"
@@ -453,7 +523,10 @@ jq -n \
 	--arg host "$HOST" \
 	--arg email "$EMAIL" \
 	--argjson imap_port "$IMAP_PORT_EFFECTIVE" \
-	--argjson smtp_port "$SMTP_PORT_EFFECTIVE" \
+	--argjson smtp_port "$SMTP_PORT_REPORTED" \
+	--arg smtp_tls_mode "$SMTP_TLS_MODE_REPORTED" \
+	--argjson smtp_starttls_port "$SMTP_STARTTLS_PORT_REPORTED" \
+	--argjson smtps_port "$SMTPS_PORT_REPORTED" \
 	--argjson sieve_port "$SIEVE_PORT_EFFECTIVE" \
 	--arg config_file "$CONFIG_FILE" \
 	--arg mail_status "$MAIL_STATUS" \
@@ -492,6 +565,9 @@ jq -n \
 			email: $email,
 			imap_port: $imap_port,
 			smtp_port: $smtp_port,
+			smtp_tls_mode: (if $smtp_tls_mode == "" then null else $smtp_tls_mode end),
+			smtp_starttls_port: $smtp_starttls_port,
+			smtps_port: $smtps_port,
 			sieve_port: $sieve_port,
 			config_file: (if $config_file == "" then null else $config_file end)
 		},
@@ -544,7 +620,11 @@ fi
 	echo "| Domain | ${DOMAIN:-_(not set)_} |"
 	echo "| Host | ${HOST:-_(from config file)_} |"
 	echo "| Mailbox | ${EMAIL:-_(from config file)_} |"
-	echo "| Ports | IMAP ${IMAP_PORT_EFFECTIVE} / SMTP ${SMTP_PORT_EFFECTIVE} / Sieve ${SIEVE_PORT_EFFECTIVE} |"
+	echo "| IMAPS port | $(describe_port "$IMAP_PORT" 993) |"
+	echo "| SMTP submission | $(describe_port "$SMTP_PORT" 587) / $(describe_smtp_transport) |"
+	echo "| SMTP STARTTLS port | $(describe_smtp_test_port "$SMTP_STARTTLS_PORT" "$SMTP_STARTTLS_PORT_DEFAULT") |"
+	echo "| SMTPS port | $(describe_smtp_test_port "$SMTPS_PORT" "$SMTPS_PORT_DEFAULT") |"
+	echo "| Sieve port | $(describe_port "$SIEVE_PORT" 4190) |"
 	echo "| Mode | \`${MODE}\` |"
 	echo "| Started | ${STARTED_AT} |"
 	echo "| Duration | $(format_duration "$DURATION") |"
